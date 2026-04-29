@@ -22,53 +22,117 @@
     factions: new Map(), // faction_id → bundle
     search: null,
     rules: null,
+    keywords: null,
+    kwIndex: null,       // { re, bySlug, byLower } built from keywords
   };
 
   async function loadIndex() {
     if (cache.index) return cache.index;
-    const r = await fetch('data/index.json');
-    cache.index = await r.json();
+    cache.index = await (await fetch('data/index.json')).json();
     return cache.index;
   }
-
   async function loadFaction(id) {
     if (cache.factions.has(id)) return cache.factions.get(id);
-    const r = await fetch(`data/factions/${id}.json`);
-    const b = await r.json();
+    const b = await (await fetch(`data/factions/${id}.json`)).json();
     cache.factions.set(id, b);
     return b;
   }
-
   async function loadSearch() {
     if (cache.search) return cache.search;
-    const r = await fetch('data/search.json');
-    cache.search = await r.json();
+    cache.search = await (await fetch('data/search.json')).json();
     return cache.search;
   }
-
   async function loadRules() {
     if (cache.rules) return cache.rules;
     const r = await fetch('data/rules.json');
-    if (!r.ok) return { sections: [] };
-    cache.rules = await r.json();
+    cache.rules = r.ok ? await r.json() : { sections: [] };
     return cache.rules;
   }
+  async function loadKeywords() {
+    if (cache.keywords) return cache.keywords;
+    const r = await fetch('data/keywords.json');
+    cache.keywords = r.ok ? await r.json() : { keywords: [] };
+    cache.kwIndex = buildKeywordIndex(cache.keywords.keywords);
+    return cache.keywords;
+  }
 
-  // Render Wahapedia rules HTML into a sanitized DOM fragment. Wahapedia uses
-  // a mix of <p>, <div>, <table>, <span class="kwb"|"impact18"|"kwbu"|...>,
-  // <b>, <br>, <a>. We walk the parsed DOM and re-emit only the bits we want.
+  // ---------------- Keyword linkifier ----------------
+
+  // Build a single big regex with all keyword names sorted longest-first.
+  // Multi-word names allow flexible whitespace (e.g. "DEEP\s+STRIKE") so the
+  // matcher copes with line-breaks or NBSP. Word boundaries on both sides
+  // prevent matching "STRIKE" inside "STRIKEFORCE".
+  function buildKeywordIndex(keywords) {
+    if (!keywords || !keywords.length) return null;
+    const items = keywords.slice().sort((a, b) => b.name.length - a.name.length);
+    const bySlug = Object.fromEntries(items.map(k => [k.slug, k]));
+    const byLower = new Map(items.map(k => [k.name.toLowerCase(), k.slug]));
+    const escaped = items.map(k =>
+      k.name
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\s+/g, '\\s+')
+    );
+    const re = new RegExp(`\\b(${escaped.join('|')})\\b`, 'gi');
+    return { re, bySlug, byLower };
+  }
+
+  // Walk text nodes inside `root` and turn keyword matches into anchor links.
+  // Skips text already inside <a> elements so we never double-link.
+  function linkifyKeywords(root) {
+    const idx = cache.kwIndex;
+    if (!idx || !root) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        let p = node.parentNode;
+        while (p && p !== root) {
+          if (p.nodeName === 'A') return NodeFilter.FILTER_REJECT;
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const nodes = [];
+    let n; while ((n = walker.nextNode())) nodes.push(n);
+    for (const node of nodes) {
+      const text = node.textContent;
+      idx.re.lastIndex = 0;
+      if (!idx.re.test(text)) continue;
+      idx.re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0, m;
+      while ((m = idx.re.exec(text)) !== null) {
+        if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+        const slug = idx.byLower.get(m[0].toLowerCase().replace(/\s+/g, ' '));
+        if (slug) {
+          const a = document.createElement('a');
+          a.href = `#/keyword/${slug}`;
+          a.className = 'kw-link';
+          a.textContent = m[0];
+          frag.appendChild(a);
+        } else {
+          frag.appendChild(document.createTextNode(m[0]));
+        }
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+
+  // ---------------- Rules HTML renderer ----------------
+
   const BLOCK = new Set(['p', 'div', 'tr', 'table', 'li', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4']);
   function renderRulesHTML(html) {
     const out = document.createElement('div');
     if (!html) return out;
     const doc = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html');
-    const root = doc.body.firstChild;
-    walkNode(root, out, {});
+    walkNode(doc.body.firstChild, out, {});
+    linkifyKeywords(out);
     return out;
   }
   function walkNode(node, parent, ctx) {
     for (const child of node.childNodes) {
-      if (child.nodeType === 3) { // text
+      if (child.nodeType === 3) {
         if (!child.textContent) continue;
         const span = document.createElement('span');
         span.textContent = child.textContent;
@@ -76,48 +140,102 @@
         if (ctx.kwb) span.className = 'kwb';
         if (ctx.header) { span.style.fontWeight = '600'; span.style.display = 'block'; span.style.marginTop = '8px'; }
         parent.appendChild(span);
-      } else if (child.nodeType === 1) { // element
+      } else if (child.nodeType === 1) {
         const tag = child.tagName.toLowerCase();
         const cls = child.getAttribute('class') || '';
-        if (tag === 'br') {
-          parent.appendChild(document.createElement('br'));
-          continue;
-        }
+        if (tag === 'br') { parent.appendChild(document.createElement('br')); continue; }
         const newCtx = { ...ctx };
         if (tag === 'b' || tag === 'strong') newCtx.bold = true;
         if (cls.includes('kwb') && !cls.includes('kwbu')) newCtx.kwb = true;
         if (cls.includes('impact18') || cls.includes('impact20')) newCtx.header = true;
         if (cls.includes('kwbu')) newCtx.bold = true;
-        // Block-level elements get separated by line breaks.
         const block = BLOCK.has(tag) || cls.includes('BreakInsideAvoid');
         if (block && parent.childNodes.length && parent.lastChild.nodeName !== 'BR') {
           parent.appendChild(document.createElement('br'));
         }
         walkNode(child, parent, newCtx);
-        if (block) {
-          parent.appendChild(document.createElement('br'));
-        }
+        if (block) parent.appendChild(document.createElement('br'));
       }
     }
   }
 
-  // ---------------- Views ----------------
+  // ---------------- Search index helpers ----------------
+
+  function searchHits(type, q, limit = 100) {
+    if (!cache.search) return [];
+    q = q.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const out = [];
+    for (const r of cache.search) {
+      if (r.t !== type) continue;
+      if (r.n.toLowerCase().includes(q)) {
+        out.push(r);
+        if (out.length >= limit) break;
+      }
+    }
+    return out;
+  }
+
+  function tabSearch({ placeholder, type, makeHref, factionsById }) {
+    const input = el('input', { class: 'search-input', placeholder, type: 'search' });
+    const results = el('ul', { class: 'list', hidden: '' });
+    function render(q) {
+      results.replaceChildren();
+      const hits = searchHits(type, q);
+      if (!q || q.trim().length < 2) {
+        results.hidden = true;
+        return;
+      }
+      results.hidden = false;
+      if (!hits.length) {
+        results.append(el('li', {}, el('div', { class: 'empty' }, 'No matches.')));
+        return;
+      }
+      for (const h of hits) {
+        const sub = factionsById && h.f ? (factionsById[h.f] || h.f) : null;
+        results.append(el('li', {}, el('a', { href: makeHref(h) }, [
+          h.n,
+          sub ? el('span', { class: 'sub' }, sub) : null,
+        ].filter(Boolean))));
+      }
+    }
+    input.addEventListener('input', e => render(e.target.value));
+    return { input, results, isActive: () => !results.hidden };
+  }
+
+  // ---------------- Views: Units ----------------
 
   async function viewUnits() {
+    setTitle('Units');
     const idx = await loadIndex();
-    const list = el('ul', { class: 'list' },
+    await loadSearch();
+    const factionsById = Object.fromEntries(idx.factions.map(f => [f.id, f.name]));
+
+    const ts = tabSearch({
+      placeholder: 'Search all units…',
+      type: 'u',
+      makeHref: h => `#/unit/${h.f}/${h.i}`,
+      factionsById,
+    });
+
+    const factionList = el('ul', { class: 'list' },
       idx.factions.map(f =>
         el('li', {}, el('a', { href: `#/faction/${f.id}` }, f.name))
       )
     );
-    setTitle('Units');
-    return list;
+
+    // Hide the faction browse when search has results, show it when cleared.
+    ts.input.addEventListener('input', () => {
+      factionList.hidden = ts.isActive();
+    });
+
+    return el('div', {}, [ts.input, ts.results, factionList]);
   }
 
   async function viewFaction(id) {
     const b = await loadFaction(id);
     setTitle(b.faction.name);
-    const search = el('input', { class: 'search-input', placeholder: 'Filter units…', type: 'search' });
+    const search = el('input', { class: 'search-input', placeholder: `Filter ${b.faction.name} units…`, type: 'search' });
     const ul = el('ul', { class: 'list' });
     function render(filter) {
       ul.replaceChildren(...b.datasheets
@@ -134,6 +252,7 @@
 
   async function viewUnit(factionId, unitId) {
     const b = await loadFaction(factionId);
+    await loadKeywords();
     const ds = b.datasheets.find(d => d.id === unitId);
     if (!ds) return el('div', { class: 'empty' }, 'Unit not found.');
     setTitle(ds.name);
@@ -233,29 +352,40 @@
     return out;
   }
 
+  // ---------------- Views: Detachments ----------------
+
   async function viewDetachments() {
-    const idx = await loadIndex();
-    const list = el('ul', { class: 'list' },
-      idx.factions.map(f =>
-        el('li', {}, el('a', { href: `#/faction-detachments/${f.id}` }, f.name))
-      )
-    );
     setTitle('Detachments');
-    return list;
+    const idx = await loadIndex();
+    await loadSearch();
+    const factionsById = Object.fromEntries(idx.factions.map(f => [f.id, f.name]));
+
+    const ts = tabSearch({
+      placeholder: 'Search all detachments…',
+      type: 'd',
+      makeHref: h => `#/detachment/${h.f}/${h.i}`,
+      factionsById,
+    });
+
+    const factionList = el('ul', { class: 'list' },
+      idx.factions.map(f => el('li', {}, el('a', { href: `#/faction-detachments/${f.id}` }, f.name)))
+    );
+    ts.input.addEventListener('input', () => { factionList.hidden = ts.isActive(); });
+
+    return el('div', {}, [ts.input, ts.results, factionList]);
   }
 
   async function viewFactionDetachments(id) {
     const b = await loadFaction(id);
     setTitle(b.faction.name);
     return el('ul', { class: 'list' },
-      b.detachments.map(d =>
-        el('li', {}, el('a', { href: `#/detachment/${id}/${d.id}` }, d.name))
-      )
+      b.detachments.map(d => el('li', {}, el('a', { href: `#/detachment/${id}/${d.id}` }, d.name)))
     );
   }
 
   async function viewDetachment(factionId, detId) {
     const b = await loadFaction(factionId);
+    await loadKeywords();
     const det = b.detachments.find(d => d.id === detId);
     if (!det) return el('div', { class: 'empty' }, 'Detachment not found.');
     setTitle(det.name);
@@ -310,9 +440,8 @@
     return out;
   }
 
-  // The phase-based grouping is heuristic — Wahapedia's page doesn't expose
-  // phases as h2 tags, so we infer from titles starting with "1./2./3." plus
-  // a manual mapping of phase boundaries.
+  // ---------------- Views: Rules ----------------
+
   const RULES_GROUPS = [
     { label: 'Game Setup', match: ['Books', 'Missions', 'Armies', 'Battlefield', 'Measuring Distances', 'Determining Visibility', 'Dice', 'Sequencing'] },
     { label: 'Command Phase', match: ['1. Command', '2. Battle-shock'] },
@@ -329,86 +458,109 @@
     if (!r.sections.length) {
       return el('div', { class: 'empty' }, 'Rules unavailable. The scraper may have failed on the last build — check back tomorrow.');
     }
+    await loadSearch();
+
+    const ts = tabSearch({
+      placeholder: 'Search rules…',
+      type: 'r',
+      makeHref: h => `#/rules/${h.i}`,
+    });
+
     const bySlug = Object.fromEntries(r.sections.map(s => [s.title, s]));
-    const wrap = el('div');
+    const toc = el('div');
     const seen = new Set();
     for (const grp of RULES_GROUPS) {
       const items = grp.match.map(t => bySlug[t]).filter(Boolean);
       if (!items.length) continue;
-      wrap.append(el('div', { class: 'rules-toc-group' }, grp.label));
+      toc.append(el('div', { class: 'rules-toc-group' }, grp.label));
       const ul = el('ul', { class: 'list' },
         items.map(s => {
           seen.add(s.slug);
           return el('li', {}, el('a', { href: `#/rules/${s.slug}` }, s.title));
         })
       );
-      wrap.append(ul);
+      toc.append(ul);
     }
-    // Anything not in a known group goes into "Other" so nothing's hidden.
     const leftover = r.sections.filter(s => !seen.has(s.slug));
     if (leftover.length) {
-      wrap.append(el('div', { class: 'rules-toc-group' }, 'Other'));
-      wrap.append(el('ul', { class: 'list' },
+      toc.append(el('div', { class: 'rules-toc-group' }, 'Other'));
+      toc.append(el('ul', { class: 'list' },
         leftover.map(s => el('li', {}, el('a', { href: `#/rules/${s.slug}` }, s.title)))
       ));
     }
-    return wrap;
+    ts.input.addEventListener('input', () => { toc.hidden = ts.isActive(); });
+
+    return el('div', {}, [ts.input, ts.results, toc]);
   }
 
   async function viewRulesSection(slug) {
     const r = await loadRules();
+    await loadKeywords();
     const sec = r.sections.find(s => s.slug === slug);
     if (!sec) return el('div', { class: 'empty' }, 'Section not found.');
     setTitle(sec.title);
     const card = el('div', { class: 'card rules' });
     card.append(el('h2', { style: 'margin-top:0' }, sec.title));
-    // Server-side sanitized HTML — safe to assign.
     const body = el('div');
     body.innerHTML = sec.html;
+    linkifyKeywords(body);
     card.append(body);
     return card;
   }
 
-  async function viewSearch() {
-    setTitle('Search');
-    const search = await loadSearch();
-    const idx = await loadIndex();
-    const factionsById = Object.fromEntries(idx.factions.map(f => [f.id, f.name]));
+  // ---------------- Views: Keywords ----------------
 
-    const input = el('input', { class: 'search-input', placeholder: 'Search units, stratagems, detachments…', type: 'search', autofocus: true });
+  async function viewKeywords() {
+    setTitle('Keywords');
+    const k = await loadKeywords();
+    if (!k.keywords.length) {
+      return el('div', { class: 'empty' }, 'Keywords unavailable. The scraper may have failed on the last build.');
+    }
+    const search = el('input', { class: 'search-input', placeholder: 'Search keywords…', type: 'search' });
     const ul = el('ul', { class: 'list' });
-
-    const typeIcon = { u: '⚔', s: '⚡', d: '🛡', r: '📖' };
-    const typeLabel = { u: 'Unit', s: 'Stratagem', d: 'Detachment', r: 'Rule' };
-
+    const TYPE_LABEL = { weapon: 'Weapon', ability: 'Ability', rule: 'Rule' };
     function render(q) {
-      ul.replaceChildren();
       q = q.trim().toLowerCase();
-      if (q.length < 2) {
-        ul.append(el('li', {}, el('div', { class: 'empty' }, 'Type at least 2 characters.')));
-        return;
-      }
-      const hits = search.filter(r => r.n.toLowerCase().includes(q)).slice(0, 100);
-      if (!hits.length) {
-        ul.append(el('li', {}, el('div', { class: 'empty' }, 'No matches.')));
-        return;
-      }
-      for (const h of hits) {
-        const href = h.t === 'u' ? `#/unit/${h.f}/${h.i}`
-                   : h.t === 's' ? `#/detachment/${h.f}/${h.d}`
-                   : h.t === 'd' ? `#/detachment/${h.f}/${h.i}`
-                   : `#/rules/${h.i}`;
-        const sub = h.t === 'r' ? typeLabel[h.t] : `${typeLabel[h.t]} · ${factionsById[h.f] || h.f}`;
-        ul.append(el('li', {}, el('a', { href }, [
-          el('div', {}, `${typeIcon[h.t] || ''} ${h.n}`),
-          el('span', { class: 'sub' }, sub),
-        ])));
-      }
+      const items = q.length < 1
+        ? k.keywords
+        : k.keywords.filter(kw => kw.name.toLowerCase().includes(q));
+      ul.replaceChildren(...items.map(kw =>
+        el('li', {}, el('a', { href: `#/keyword/${kw.slug}` }, [
+          kw.name,
+          el('span', { class: 'sub' }, TYPE_LABEL[kw.type] || 'Rule'),
+        ]))
+      ));
     }
     render('');
-    input.addEventListener('input', e => render(e.target.value));
-    return el('div', {}, [input, ul]);
+    search.addEventListener('input', e => render(e.target.value));
+    return el('div', {}, [search, ul]);
   }
+
+  async function viewKeyword(slug) {
+    const k = await loadKeywords();
+    const kw = k.keywords.find(x => x.slug === slug);
+    if (!kw) return el('div', { class: 'empty' }, 'Keyword not found.');
+    setTitle(kw.name);
+    const card = el('div', { class: 'card rules' });
+    const TYPE_LABEL = { weapon: 'Weapon ability', ability: 'Unit ability', rule: 'Rule' };
+    card.append(el('h2', { style: 'margin-top:0' }, kw.name));
+    card.append(el('div', { class: 'sub', style: 'margin-bottom:10px' }, TYPE_LABEL[kw.type] || 'Rule'));
+    const body = el('div');
+    body.innerHTML = kw.html;
+    // Linkify too — keywords often reference other keywords (e.g. Sustained
+    // Hits mentions Critical Hit). But avoid linking the keyword to itself.
+    linkifyKeywords(body);
+    for (const a of body.querySelectorAll(`a[href="#/keyword/${slug}"]`)) {
+      const span = document.createElement('span');
+      span.style.fontWeight = '600';
+      span.textContent = a.textContent;
+      a.replaceWith(span);
+    }
+    card.append(body);
+    return card;
+  }
+
+  // ---------------- Views: About ----------------
 
   async function viewAbout() {
     setTitle('About');
@@ -438,14 +590,12 @@
     { re: /^#\/detachment\/([^/]+)\/([^/]+)\/?$/, handler: (m) => viewDetachment(m[1], m[2]), tab: 'detachments' },
     { re: /^#\/rules\/?$/, handler: viewRules, tab: 'rules' },
     { re: /^#\/rules\/([^/]+)\/?$/, handler: (m) => viewRulesSection(m[1]), tab: 'rules' },
-    { re: /^#\/search\/?$/, handler: viewSearch, tab: 'search' },
+    { re: /^#\/keywords\/?$/, handler: viewKeywords, tab: 'keywords' },
+    { re: /^#\/keyword\/([^/]+)\/?$/, handler: (m) => viewKeyword(m[1]), tab: 'keywords' },
     { re: /^#\/about\/?$/, handler: viewAbout, tab: 'about' },
   ];
 
-  function setTitle(t) {
-    $('#title').textContent = t;
-  }
-
+  function setTitle(t) { $('#title').textContent = t; }
   function setActiveTab(tab) {
     for (const a of document.querySelectorAll('#tabs a')) {
       a.classList.toggle('active', a.dataset.tab === tab);
@@ -459,9 +609,7 @@
     const app = $('#app');
     app.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
 
-    if (hash !== navStack[navStack.length - 1]) {
-      navStack.push(hash);
-    }
+    if (hash !== navStack[navStack.length - 1]) navStack.push(hash);
     $('#back').hidden = navStack.length <= 1;
 
     for (const { re, handler, tab } of routes) {
@@ -492,11 +640,16 @@
     }
   });
 
+  // Eagerly preload the small cross-cutting indexes so per-tab search is
+  // instant when the user starts typing, and so linkify is ready by the
+  // time they open a unit/stratagem/rule.
+  loadSearch().catch(() => {});
+  loadKeywords().catch(() => {});
+
   window.addEventListener('hashchange', route);
   window.addEventListener('load', route);
 
-  // Service worker for offline.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* non-fatal */ });
+    navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 })();

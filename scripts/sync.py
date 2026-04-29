@@ -467,12 +467,144 @@ def validate_rules(sections: list[dict]) -> tuple[bool, str]:
     return True, "ok"
 
 
-def sync_core_rules(out_dir: Path) -> None:
+# ---------------- Keyword scraper ----------------
+# Two sources combined:
+#   1) <span id="tooltip_contentNNNNN"> blocks at the bottom of the core
+#      rules page — these define ~50 unit abilities and rule concepts
+#      (DEEP STRIKE, INFILTRATORS, LEADER, Engagement Range, etc.).
+#   2) <h3> sub-sections inside the Weapon Abilities part of the page —
+#      these define ~22 weapon abilities ([SUSTAINED HITS], [LANCE], etc.)
+#      that don't have tooltips of their own.
+# Both are sanitized via _sanitize_node and emitted as one keyword list.
+
+_TOOLTIP_BLOCK = re.compile(
+    r'<span\s+id="tooltip_content(\d+)"[^>]*>(.*?)</span></div>',
+    re.DOTALL,
+)
+_TOOLTIP_NAME = re.compile(
+    r'<div class="(?:tooltip_header|abName)">([^<]+)</div>'
+)
+
+
+def scrape_keywords(html: str) -> list[dict]:
+    keywords: list[dict] = []
+    seen_slugs: set[str] = set()
+
+    # 1) Tooltip definitions.
+    for m in _TOOLTIP_BLOCK.finditer(html):
+        body = m.group(2)
+        name_m = _TOOLTIP_NAME.search(body)
+        if not name_m:
+            continue
+        name = name_m.group(1).strip()
+        # Some tooltip names are noise from inline stratagem cards — skip
+        # anything that looks like a numbered stratagem header.
+        if re.match(r"^\d+\s*CP", name) or len(name) > 80:
+            continue
+        # Drop the header div + the link/anchor div before sanitizing.
+        body_no_header = _TOOLTIP_NAME.sub("", body, count=1)
+        body_no_header = re.sub(
+            r'<a[^>]*><div class="tooltip_link"></div></a>', "", body_no_header
+        )
+        body_no_header = re.sub(
+            r'<div style="clear:both"></div>', "", body_no_header
+        )
+        soup = BeautifulSoup(f"<div>{body_no_header}</div>", "html.parser")
+        for el in soup.find_all("div", class_=re.compile(r"tooltip_link|tooltip_header")):
+            el.decompose()
+        _sanitize_node(soup.div)
+        for tag in list(soup.div.find_all(["p", "div"])):
+            if not tag.get_text(strip=True) and not tag.find("img"):
+                tag.decompose()
+        desc = soup.div.decode_contents().strip()
+        if not desc:
+            continue
+        kw_type = _classify_keyword(name, desc)
+        slug = _slugify(name)
+        if slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+        keywords.append({"slug": slug, "name": name, "type": kw_type, "html": desc})
+
+    # 2) Weapon abilities — h3s inside the "Weapon Abilities" h3 section.
+    wa_m = re.search(r'<h3[^>]*>Weapon Abilities</h3>', html)
+    if wa_m:
+        end_m = re.search(r"<h[12]\b", html[wa_m.end():])
+        wa_chunk = html[wa_m.end(): wa_m.end() + (end_m.start() if end_m else 80000)]
+        # Each weapon ability is delimited by <a name="..."></a><h3>NAME</h3>...
+        # Use the h3 positions to slice.
+        h3s = list(re.finditer(r'<h3[^>]*>([^<]+)</h3>', wa_chunk))
+        for i, hm in enumerate(h3s):
+            name = hm.group(1).strip()
+            # Skip non-weapon-ability h3s that snuck in (Charge Bonus etc.).
+            if name.lower() in {"charge bonus", "charging with a unit",
+                                 "charging over terrain", "charging with flying models"}:
+                continue
+            chunk_start = hm.end()
+            chunk_end = h3s[i + 1].start() if i + 1 < len(h3s) else len(wa_chunk)
+            chunk = wa_chunk[chunk_start:chunk_end]
+            soup = BeautifulSoup(f"<div>{chunk}</div>", "html.parser")
+            _sanitize_node(soup.div)
+            desc = soup.div.decode_contents().strip()
+            if not desc:
+                continue
+            slug = _slugify(name)
+            if slug in seen_slugs:
+                continue
+            seen_slugs.add(slug)
+            keywords.append({"slug": slug, "name": name, "type": "weapon", "html": desc})
+
+    keywords.sort(key=lambda k: k["name"].lower())
+    return keywords
+
+
+def _classify_keyword(name: str, html: str) -> str:
+    upper = name.isupper() or name.replace(" ", "").isupper()
+    text = html.lower()
+    if "in their profile" in text and "weapons" in text:
+        return "weapon"
+    if upper:
+        return "ability"
+    return "rule"
+
+
+def validate_keywords(keywords: list[dict]) -> tuple[bool, str]:
+    if len(keywords) < 30:
+        return False, f"only {len(keywords)} keywords (expected at least 30)"
+    required = {"deep-strike", "infiltrators", "leader", "precision", "sustained-hits"}
+    have = {k["slug"] for k in keywords}
+    missing = required - have
+    if missing:
+        return False, f"missing required keywords: {missing}"
+    return True, "ok"
+
+
+def sync_keywords(out_dir: Path, html=None) -> None:
+    target = out_dir / "keywords.json"
+    try:
+        if html is None:
+            html = fetch_html("the-rules/core-rules/")
+        kws = scrape_keywords(html)
+        ok, reason = validate_keywords(kws)
+        if not ok:
+            raise ValueError(f"validation failed: {reason}")
+    except Exception as e:
+        if target.exists():
+            print(f"WARN: keyword scrape failed ({e}); keeping existing keywords.json", flush=True)
+        else:
+            print(f"WARN: keyword scrape failed ({e}); no prior file to fall back to", flush=True)
+        return
+    target.write_text(json.dumps({"keywords": kws}, ensure_ascii=False))
+    print(f"  keywords.json: {len(kws)} keywords, {target.stat().st_size // 1024} KB", flush=True)
+
+
+def sync_core_rules(out_dir: Path, html=None) -> None:
     """Scrape, validate, and write rules.json. On any failure leave the
     existing file untouched so the site keeps showing the last good copy."""
     target = out_dir / "rules.json"
     try:
-        html = fetch_html("the-rules/core-rules/")
+        if html is None:
+            html = fetch_html("the-rules/core-rules/")
         sections = scrape_core_rules(html)
         ok, reason = validate_rules(sections)
         if not ok:
@@ -506,14 +638,27 @@ def main():
     index, bundles, search = build_bundles(csvs)
 
     print("Scraping Core Rules HTML page...", flush=True)
-    sync_core_rules(out_dir)
+    try:
+        rules_html = fetch_html("the-rules/core-rules/")
+    except Exception as e:
+        print(f"WARN: failed to fetch core rules page ({e}); skipping rules + keywords", flush=True)
+        rules_html = None
+    sync_core_rules(out_dir, html=rules_html)
+    sync_keywords(out_dir, html=rules_html)
 
-    # Add rule sections to the search index if rules.json exists.
+    # Add rule sections + keywords to the search index. (The web app uses
+    # per-tab search now, but the legacy combined search.json file still
+    # ships in case anything links to it.)
     rules_path = out_dir / "rules.json"
     if rules_path.exists():
         rules = json.loads(rules_path.read_text())
         for sec in rules.get("sections", []):
             search.append({"t": "r", "i": sec["slug"], "n": sec["title"]})
+    keywords_path = out_dir / "keywords.json"
+    if keywords_path.exists():
+        kws = json.loads(keywords_path.read_text())
+        for kw in kws.get("keywords", []):
+            search.append({"t": "k", "i": kw["slug"], "n": kw["name"]})
 
     (out_dir / "index.json").write_text(json.dumps(index, ensure_ascii=False))
     (out_dir / "search.json").write_text(json.dumps(search, ensure_ascii=False))

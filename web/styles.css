@@ -141,6 +141,17 @@ a { color: var(--accent); text-decoration: none; }
 
 .kwb { color: var(--accent); font-weight: 600; }
 
+.kw-link {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 3px;
+}
+.kw-link:hover, .kw-link:active {
+  text-decoration-style: solid;
+  color: var(--accent);
+}
+
 .cp {
   background: var(--accent-soft);
   color: var(--accent);
