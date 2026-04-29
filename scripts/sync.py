@@ -93,6 +93,46 @@ def nz(d: dict, k: str):
     return v if v else None
 
 
+# Boarding Actions detection.
+#   - Rules text ("description") uniquely uses BA terrain terms (hatchway, bulkhead).
+#   - Lore text ("legend") uniquely uses voidship/shipboard/etc.
+#   - Stratagem/ability/enhancement names containing "board" are universally BA
+#     (verified against the full dataset — every match is shipboard-themed).
+# Together these catch all known BA detachments without false positives.
+_BA_RULES_KEYWORDS = ("hatchway", "bulkhead")
+_BA_LEGEND_KEYWORDS = ("voidship", "shipboard", "boarding action", "voidborne")
+_BA_NAME_KEYWORDS = ("board",)  # matches "Boarding", "Boarder(s)", "Shipboard"
+
+
+def collect_boarding_actions_detachment_ids(
+    detachment_abilities: list[dict],
+    stratagems: list[dict],
+    enhancements: list[dict],
+) -> set[str]:
+    ba_ids: set[str] = set()
+    def _has(text: str, kws: tuple[str, ...]) -> bool:
+        if not text:
+            return False
+        t = text.lower()
+        return any(kw in t for kw in kws)
+    def _matches(row: dict) -> bool:
+        return (
+            _has(row.get("description", ""), _BA_RULES_KEYWORDS)
+            or _has(row.get("legend", ""), _BA_LEGEND_KEYWORDS)
+            or _has(row.get("name", ""), _BA_NAME_KEYWORDS)
+        )
+    for r in detachment_abilities:
+        if r.get("detachment_id") and _matches(r):
+            ba_ids.add(r["detachment_id"])
+    for r in stratagems:
+        if r.get("detachment_id") and _matches(r):
+            ba_ids.add(r["detachment_id"])
+    for r in enhancements:
+        if r.get("detachment_id") and _matches(r):
+            ba_ids.add(r["detachment_id"])
+    return ba_ids
+
+
 def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], list[dict]]:
     factions = csvs["Factions"]
     datasheets = csvs["Datasheets"]
@@ -105,6 +145,21 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
     detachment_abilities = csvs["Detachment_abilities"]
     stratagems = csvs["Stratagems"]
     enhancements = csvs["Enhancements"]
+
+    ba_detachment_ids = collect_boarding_actions_detachment_ids(
+        detachment_abilities, stratagems, enhancements
+    )
+    print(f"  Boarding Actions filter: dropping {len(ba_detachment_ids)} detachments", flush=True)
+
+    # Drop datasheets sourced from the Boarding Actions Companion (source_id=000000285).
+    # Currently zero rows match — Wahapedia hosts BA detachments separately but
+    # not BA-specific datasheet variants — but we filter defensively.
+    datasheets = [d for d in datasheets if d.get("source_id") != "000000285"]
+
+    # Drop BA detachments from the rule tables before any further processing.
+    detachment_abilities = [r for r in detachment_abilities if r.get("detachment_id") not in ba_detachment_ids]
+    stratagems = [r for r in stratagems if r.get("detachment_id") not in ba_detachment_ids]
+    enhancements = [r for r in enhancements if r.get("detachment_id") not in ba_detachment_ids]
 
     # Group child rows by datasheet_id for fast lookup.
     def group(rows, key="datasheet_id"):
