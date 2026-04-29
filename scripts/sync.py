@@ -40,6 +40,7 @@ CSV_FILES = [
     "Datasheets_keywords",
     "Datasheets_unit_composition",
     "Datasheets_models_cost",
+    "Datasheets_options",
     "Datasheets_stratagems",
     "Datasheets_detachment_abilities",
     "Datasheets_enhancements",
@@ -143,6 +144,7 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
     keywords = csvs["Datasheets_keywords"]
     composition = csvs["Datasheets_unit_composition"]
     costs = csvs["Datasheets_models_cost"]
+    options = csvs.get("Datasheets_options", [])
     detachment_abilities = csvs["Detachment_abilities"]
     stratagems = csvs["Stratagems"]
     enhancements = csvs["Enhancements"]
@@ -173,6 +175,7 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
     keywords = [r for r in keywords if r.get("datasheet_id") in valid_ds_ids]
     composition = [r for r in composition if r.get("datasheet_id") in valid_ds_ids]
     costs = [r for r in costs if r.get("datasheet_id") in valid_ds_ids]
+    options = [r for r in options if r.get("datasheet_id") in valid_ds_ids]
 
     # Drop BA detachments from the rule tables before any further processing.
     detachment_abilities = [r for r in detachment_abilities if r.get("detachment_id") not in ba_detachment_ids]
@@ -192,6 +195,7 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
     keywords_by_ds = group(keywords)
     comp_by_ds = group(composition)
     costs_by_ds = group(costs)
+    options_by_ds = group(options)
 
     # Detachments: synthesize from Detachment_abilities (faction_id, detachment_id, detachment).
     detachments_seen: dict[tuple[str, str], dict] = {}
@@ -272,6 +276,10 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
             comp_by_ds.get(ds_id, []),
             key=lambda r: int(r.get("line") or "0"),
         )
+        ds_options = sorted(
+            options_by_ds.get(ds_id, []),
+            key=lambda r: int(r.get("line") or "0"),
+        )
 
         bundles[fid]["datasheets"].append({
             "id": ds_id,
@@ -305,6 +313,7 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
             } for k in keywords_by_ds.get(ds_id, [])],
             "composition": [c["description"] for c in ds_comp if c.get("description")],
             "costs": [{"description": c["description"], "cost": c["cost"]} for c in ds_costs],
+            "wargearOptions": [o["description"] for o in ds_options if o.get("description")],
         })
 
     for (fid, did), det in detachments_seen.items():

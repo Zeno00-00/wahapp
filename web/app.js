@@ -332,6 +332,27 @@
       out.append(card);
     }
 
+    if (ds.loadout || (ds.wargearOptions && ds.wargearOptions.length)) {
+      const card = el('div', { class: 'card wargear-card' }, el('h3', {}, 'Wargear'));
+      if (ds.loadout) {
+        const loadoutEl = el('div', { class: 'loadout' });
+        loadoutEl.innerHTML = ds.loadout;
+        linkifyKeywords(loadoutEl);
+        card.append(loadoutEl);
+      }
+      if (ds.wargearOptions && ds.wargearOptions.length) {
+        const list = el('ul', { class: 'wargear-options' });
+        for (const opt of ds.wargearOptions) {
+          const li = el('li');
+          li.innerHTML = opt;
+          linkifyKeywords(li);
+          list.append(li);
+        }
+        card.append(list);
+      }
+      out.append(card);
+    }
+
     if (ds.composition && ds.composition.length) {
       const card = el('div', { class: 'card' }, [
         el('h3', {}, 'Unit Composition'),

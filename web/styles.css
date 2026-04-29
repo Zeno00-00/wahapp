@@ -256,6 +256,46 @@ a { color: var(--accent); text-decoration: none; }
 .ability-tag.tag-faction { background: var(--accent-soft);       color: var(--accent); }
 .ability-tag.tag-wargear { background: rgba(160, 200, 140, 0.18); color: #b8d49d; }
 
+/* Wargear */
+.wargear-card .loadout { margin: 4px 0 10px; line-height: 1.5; }
+.wargear-card .loadout b { color: var(--text); }
+.wargear-options {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.wargear-options > li {
+  position: relative;
+  padding: 8px 0 8px 18px;
+  border-top: 1px dashed var(--border);
+  line-height: 1.5;
+}
+.wargear-options > li::before {
+  content: "▸";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  color: var(--accent);
+  font-size: 14px;
+}
+.wargear-options ul {
+  list-style: none !important;  /* override inline style="list-style-type:circle" from source */
+  padding-left: 14px;
+  margin: 4px 0 0;
+}
+.wargear-options ul > li {
+  position: relative;
+  padding: 2px 0 2px 14px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.wargear-options ul > li::before {
+  content: "○";
+  position: absolute;
+  left: 0;
+  font-size: 11px;
+}
+
 /* Keywords */
 .kw-card .kw-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .kw-chip {
