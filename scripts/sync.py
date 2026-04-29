@@ -13,11 +13,14 @@ Wahapedia 403s default user agents; we send a real Safari UA.
 """
 
 import json
+import re
 import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 BASE = "https://wahapedia.ru/wh40k10ed/"
 UA = (
@@ -48,6 +51,13 @@ CSV_FILES = [
 def fetch(name: str) -> str:
     url = BASE + name + ".csv"
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/csv,*/*;q=0.9"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read().decode("utf-8")
+
+
+def fetch_html(path: str) -> str:
+    url = BASE + path.lstrip("/")
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "text/html,*/*;q=0.9"})
     with urllib.request.urlopen(req, timeout=60) as resp:
         return resp.read().decode("utf-8")
 
@@ -263,6 +273,167 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
     return index, bundles, search
 
 
+# ---------------- Core rules scraper ----------------
+# Wahapedia's core rules page is structured HTML (h2 sections, h3 subsections).
+# No CSV export exists, so we scrape. This pipeline is more fragile than the
+# CSVs — see scrape_core_rules() for the validation that gates the result.
+
+# Tags we keep verbatim; everything else is unwrapped (children preserved).
+_KEEP_TAGS = {"p", "br", "b", "strong", "i", "em", "u", "ul", "ol", "li",
+              "table", "thead", "tbody", "tr", "td", "th",
+              "h3", "h4", "h5", "div", "span", "img"}
+# Strip these and their contents entirely.
+_DROP_SUBTREE = {"script", "style", "noscript", "iframe", "ins", "form"}
+# Class fragments that signal "ad/nav/widget" — drop subtree if seen on a div/span.
+_DROP_CLASS_FRAGMENTS = ("redDiamond", "ezoic", "ez-", "adsbygoogle", "ad-", "anchor_top")
+
+
+def _slugify(s: str) -> str:
+    s = re.sub(r"[^\w\s-]", "", s.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s or "section"
+
+
+def _attached(el: Tag) -> bool:
+    """True if `el` is still part of a parsed tree (not decomposed/unwrapped)."""
+    return el.parent is not None and el.attrs is not None
+
+
+def _sanitize_node(node: Tag) -> None:
+    """In-place sanitization: drop ads/nav, unwrap unknown tags, normalize attrs.
+
+    Done in three passes (decompose → unwrap → attr scrub) because mutating
+    the tree mid-walk leaves `descendants` yielding detached nodes whose
+    `attrs` is None.
+    """
+    # Pass 1: drop junk subtrees.
+    for el in list(node.descendants):
+        if not isinstance(el, Tag) or not _attached(el):
+            continue
+        if el.name in _DROP_SUBTREE:
+            el.decompose()
+            continue
+        cls = " ".join(el.get("class") or [])
+        if any(frag in cls for frag in _DROP_CLASS_FRAGMENTS):
+            el.decompose()
+
+    # Pass 2: unwrap unknown tags and anchors (preserve children).
+    for el in list(node.descendants):
+        if not isinstance(el, Tag) or not _attached(el):
+            continue
+        if el.name == "a" or el.name not in _KEEP_TAGS:
+            el.unwrap()
+
+    # Pass 3: normalize attributes on the survivors.
+    for el in list(node.descendants):
+        if not isinstance(el, Tag) or not _attached(el):
+            continue
+        if el.name == "img":
+            src = el.get("src", "")
+            if src.startswith("/"):
+                src = "https://wahapedia.ru" + src
+            el.attrs = {"src": src, "alt": el.get("alt", "")}
+        elif el.name == "span":
+            cls = " ".join(c for c in (el.get("class") or [])
+                           if c in {"kwb", "kwbu", "impact18", "impact20", "tt"})
+            el.attrs = {"class": cls} if cls else {}
+        elif el.name == "div":
+            cls = " ".join(c for c in (el.get("class") or [])
+                           if c in {"BreakInsideAvoid", "Columns2"})
+            el.attrs = {"class": cls} if cls else {}
+        else:
+            el.attrs = {}
+
+
+_H2_RE = re.compile(r"<h2\b[^>]*>(.*?)</h2>", re.DOTALL | re.IGNORECASE)
+
+
+def scrape_core_rules(html: str) -> list[dict]:
+    """Parse the Core Rules HTML page into [{slug, title, html}, ...].
+
+    Strategy: find all <h2> opening positions in source order, slice the HTML
+    between consecutive h2s, and sanitize each slice. This avoids fragile DOM
+    ancestor walks across the inconsistently nested page.
+    """
+    matches = list(_H2_RE.finditer(html))
+    if not matches:
+        return []
+
+    sections: list[dict] = []
+    used_slugs: set[str] = set()
+    for i, m in enumerate(matches):
+        title_html = m.group(1)
+        # Strip nested tags for plain title text.
+        title = re.sub(r"<[^>]+>", "", title_html).strip()
+        if not title:
+            continue
+
+        chunk_start = m.end()
+        chunk_end = matches[i + 1].start() if i + 1 < len(matches) else len(html)
+        chunk_html = html[chunk_start:chunk_end]
+
+        soup = BeautifulSoup(f"<div>{chunk_html}</div>", "html.parser")
+        container = soup.div
+        _sanitize_node(container)
+        for p in container.find_all("p"):
+            if not p.get_text(strip=True) and not p.find("img"):
+                p.decompose()
+
+        body = container.decode_contents().strip()
+        if not body:
+            continue
+
+        slug = _slugify(title)
+        base = slug
+        n = 2
+        while slug in used_slugs:
+            slug = f"{base}-{n}"
+            n += 1
+        used_slugs.add(slug)
+
+        sections.append({"slug": slug, "title": title, "html": body})
+
+    return sections
+
+
+def validate_rules(sections: list[dict]) -> tuple[bool, str]:
+    """Sanity-check the scrape. Returns (ok, reason)."""
+    if len(sections) < 20:
+        return False, f"only {len(sections)} sections (expected at least 20)"
+    short = [s["title"] for s in sections if len(s["html"]) < 50]
+    if len(short) > len(sections) // 3:
+        return False, f"too many empty/short sections: {short[:5]}…"
+    # Anchor sanity: a few well-known section titles should be present.
+    titles = {s["title"].lower() for s in sections}
+    required = {"battlefield", "dice", "1. command", "1. hit roll"}
+    missing = [t for t in required if t not in titles]
+    if missing:
+        return False, f"missing required sections: {missing}"
+    return True, "ok"
+
+
+def sync_core_rules(out_dir: Path) -> None:
+    """Scrape, validate, and write rules.json. On any failure leave the
+    existing file untouched so the site keeps showing the last good copy."""
+    target = out_dir / "rules.json"
+    try:
+        html = fetch_html("the-rules/core-rules/")
+        sections = scrape_core_rules(html)
+        ok, reason = validate_rules(sections)
+        if not ok:
+            raise ValueError(f"validation failed: {reason}")
+    except Exception as e:
+        if target.exists():
+            print(f"WARN: core rules scrape failed ({e}); keeping existing rules.json", flush=True)
+        else:
+            print(f"WARN: core rules scrape failed ({e}); no prior file to fall back to", flush=True)
+        return
+
+    payload = {"sections": sections}
+    target.write_text(json.dumps(payload, ensure_ascii=False))
+    print(f"  rules.json: {len(sections)} sections, {target.stat().st_size // 1024} KB", flush=True)
+
+
 def main():
     out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist/data")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -278,6 +449,16 @@ def main():
 
     print("Building bundles...", flush=True)
     index, bundles, search = build_bundles(csvs)
+
+    print("Scraping Core Rules HTML page...", flush=True)
+    sync_core_rules(out_dir)
+
+    # Add rule sections to the search index if rules.json exists.
+    rules_path = out_dir / "rules.json"
+    if rules_path.exists():
+        rules = json.loads(rules_path.read_text())
+        for sec in rules.get("sections", []):
+            search.append({"t": "r", "i": sec["slug"], "n": sec["title"]})
 
     (out_dir / "index.json").write_text(json.dumps(index, ensure_ascii=False))
     (out_dir / "search.json").write_text(json.dumps(search, ensure_ascii=False))

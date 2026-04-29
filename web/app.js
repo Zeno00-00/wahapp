@@ -21,6 +21,7 @@
     index: null,
     factions: new Map(), // faction_id → bundle
     search: null,
+    rules: null,
   };
 
   async function loadIndex() {
@@ -43,6 +44,14 @@
     const r = await fetch('data/search.json');
     cache.search = await r.json();
     return cache.search;
+  }
+
+  async function loadRules() {
+    if (cache.rules) return cache.rules;
+    const r = await fetch('data/rules.json');
+    if (!r.ok) return { sections: [] };
+    cache.rules = await r.json();
+    return cache.rules;
   }
 
   // Render Wahapedia rules HTML into a sanitized DOM fragment. Wahapedia uses
@@ -301,6 +310,65 @@
     return out;
   }
 
+  // The phase-based grouping is heuristic — Wahapedia's page doesn't expose
+  // phases as h2 tags, so we infer from titles starting with "1./2./3." plus
+  // a manual mapping of phase boundaries.
+  const RULES_GROUPS = [
+    { label: 'Game Setup', match: ['Books', 'Missions', 'Armies', 'Battlefield', 'Measuring Distances', 'Determining Visibility', 'Dice', 'Sequencing'] },
+    { label: 'Command Phase', match: ['1. Command', '2. Battle-shock'] },
+    { label: 'Movement Phase', match: ['1. Move Units', '2. Reinforcements', 'Transports'] },
+    { label: 'Shooting Phase', match: ['1. Hit Roll', '2. Wound Roll', '3. Allocate Attack', '4. Saving Throw', '5. Inflict Damage'] },
+    { label: 'Charge / Fight Phase', match: ['1. Fights First', '2. Remaining Combats', '1. Pile In', '2. Make Melee Attacks', '3. Consolidate'] },
+    { label: 'Terrain', match: ['Craters and Rubble', 'Barricades and Fuel Pipes', 'Battlefield Debris and Statuary', 'Hills, Industrial Structures, Sealed Buildings and Armoured Containers', 'Woods', 'Ruins', 'Example Battlefields'] },
+    { label: 'Building an Army', match: ['Muster Your Army', 'Objective Markers', 'Mission Map Key'] },
+  ];
+
+  async function viewRules() {
+    setTitle('Core Rules');
+    const r = await loadRules();
+    if (!r.sections.length) {
+      return el('div', { class: 'empty' }, 'Rules unavailable. The scraper may have failed on the last build — check back tomorrow.');
+    }
+    const bySlug = Object.fromEntries(r.sections.map(s => [s.title, s]));
+    const wrap = el('div');
+    const seen = new Set();
+    for (const grp of RULES_GROUPS) {
+      const items = grp.match.map(t => bySlug[t]).filter(Boolean);
+      if (!items.length) continue;
+      wrap.append(el('div', { class: 'rules-toc-group' }, grp.label));
+      const ul = el('ul', { class: 'list' },
+        items.map(s => {
+          seen.add(s.slug);
+          return el('li', {}, el('a', { href: `#/rules/${s.slug}` }, s.title));
+        })
+      );
+      wrap.append(ul);
+    }
+    // Anything not in a known group goes into "Other" so nothing's hidden.
+    const leftover = r.sections.filter(s => !seen.has(s.slug));
+    if (leftover.length) {
+      wrap.append(el('div', { class: 'rules-toc-group' }, 'Other'));
+      wrap.append(el('ul', { class: 'list' },
+        leftover.map(s => el('li', {}, el('a', { href: `#/rules/${s.slug}` }, s.title)))
+      ));
+    }
+    return wrap;
+  }
+
+  async function viewRulesSection(slug) {
+    const r = await loadRules();
+    const sec = r.sections.find(s => s.slug === slug);
+    if (!sec) return el('div', { class: 'empty' }, 'Section not found.');
+    setTitle(sec.title);
+    const card = el('div', { class: 'card rules' });
+    card.append(el('h2', { style: 'margin-top:0' }, sec.title));
+    // Server-side sanitized HTML — safe to assign.
+    const body = el('div');
+    body.innerHTML = sec.html;
+    card.append(body);
+    return card;
+  }
+
   async function viewSearch() {
     setTitle('Search');
     const search = await loadSearch();
@@ -310,8 +378,8 @@
     const input = el('input', { class: 'search-input', placeholder: 'Search units, stratagems, detachments…', type: 'search', autofocus: true });
     const ul = el('ul', { class: 'list' });
 
-    const typeIcon = { u: '⚔', s: '⚡', d: '🛡' };
-    const typeLabel = { u: 'Unit', s: 'Stratagem', d: 'Detachment' };
+    const typeIcon = { u: '⚔', s: '⚡', d: '🛡', r: '📖' };
+    const typeLabel = { u: 'Unit', s: 'Stratagem', d: 'Detachment', r: 'Rule' };
 
     function render(q) {
       ul.replaceChildren();
@@ -328,10 +396,12 @@
       for (const h of hits) {
         const href = h.t === 'u' ? `#/unit/${h.f}/${h.i}`
                    : h.t === 's' ? `#/detachment/${h.f}/${h.d}`
-                   : `#/detachment/${h.f}/${h.i}`;
+                   : h.t === 'd' ? `#/detachment/${h.f}/${h.i}`
+                   : `#/rules/${h.i}`;
+        const sub = h.t === 'r' ? typeLabel[h.t] : `${typeLabel[h.t]} · ${factionsById[h.f] || h.f}`;
         ul.append(el('li', {}, el('a', { href }, [
           el('div', {}, `${typeIcon[h.t] || ''} ${h.n}`),
-          el('span', { class: 'sub' }, `${typeLabel[h.t]} · ${factionsById[h.f] || h.f}`),
+          el('span', { class: 'sub' }, sub),
         ])));
       }
     }
@@ -366,6 +436,8 @@
     { re: /^#\/detachments\/?$/, handler: viewDetachments, tab: 'detachments' },
     { re: /^#\/faction-detachments\/([^/]+)\/?$/, handler: (m) => viewFactionDetachments(m[1]), tab: 'detachments' },
     { re: /^#\/detachment\/([^/]+)\/([^/]+)\/?$/, handler: (m) => viewDetachment(m[1], m[2]), tab: 'detachments' },
+    { re: /^#\/rules\/?$/, handler: viewRules, tab: 'rules' },
+    { re: /^#\/rules\/([^/]+)\/?$/, handler: (m) => viewRulesSection(m[1]), tab: 'rules' },
     { re: /^#\/search\/?$/, handler: viewSearch, tab: 'search' },
     { re: /^#\/about\/?$/, handler: viewAbout, tab: 'about' },
   ];

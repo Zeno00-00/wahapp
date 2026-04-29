@@ -176,3 +176,51 @@ details summary::-webkit-details-marker { display: none; }
   text-align: center; color: var(--muted); padding: 40px 16px;
 }
 .error { color: var(--danger); padding: 12px 0; }
+
+/* Rule section content (sanitized HTML from core rules scraper). */
+.rules h3 {
+  margin: 18px 0 6px;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rules h4, .rules h5 { margin: 14px 0 4px; font-size: 15px; }
+.rules p { margin: 8px 0; }
+.rules ul, .rules ol { padding-left: 22px; margin: 8px 0; }
+.rules table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 14px;
+}
+.rules td, .rules th {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  vertical-align: top;
+}
+.rules th, .rules td b { color: var(--text); }
+.rules img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 8px 0;
+  background: var(--surface-2);
+}
+.rules .impact18, .rules .impact20 {
+  display: block;
+  font-weight: 700;
+  font-size: 16px;
+  margin-top: 12px;
+  letter-spacing: 0.02em;
+}
+.rules .kwb { color: var(--accent); font-weight: 600; }
+.rules .kwbu { font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; }
+
+.rules-toc-group {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}

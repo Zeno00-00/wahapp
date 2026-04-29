@@ -27,6 +27,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python deps
+        run: pip install --quiet beautifulsoup4
+
       - name: Build site
         run: |
           mkdir -p dist
