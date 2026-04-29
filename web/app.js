@@ -276,7 +276,12 @@
         if (ds.models.length > 1) card.append(el('div', { class: 'model-name' }, m.name));
         const row = el('div', { class: 'stat-row' });
         const stats = [['M', m.M], ['T', m.T], ['SV', m.Sv]];
-        if (m.invSv && m.invSv !== '-') stats.push(['INV', m.invSv]);
+        if (m.invSv && m.invSv !== '-') {
+          // Wahapedia ships inv saves as bare digits ("4", "4*") while regular
+          // saves come pre-formatted ("4+"). Normalize so both read the same.
+          const inv = /\d\+/.test(m.invSv) ? m.invSv : m.invSv.replace(/^(\d)/, '$1+');
+          stats.push(['INV', inv]);
+        }
         stats.push(['W', m.W], ['LD', m.Ld], ['OC', m.OC]);
         for (const [lbl, val] of stats) {
           row.append(el('div', { class: 'stat' }, [
