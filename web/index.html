@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Wahapp</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Wahapp">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header id="topbar">
+  <button id="back" aria-label="Back" hidden>&larr;</button>
+  <h1 id="title">Wahapp</h1>
+</header>
+<nav id="tabs">
+  <a href="#/units" data-tab="units">Units</a>
+  <a href="#/detachments" data-tab="detachments">Detachments</a>
+  <a href="#/search" data-tab="search">Search</a>
+  <a href="#/about" data-tab="about">About</a>
+</nav>
+<main id="app"></main>
+<script src="app.js"></script>
+</body>
+</html>
