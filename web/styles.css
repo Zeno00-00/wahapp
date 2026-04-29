@@ -111,25 +111,20 @@ a { color: var(--accent); text-decoration: none; }
 .card h4 { margin: 0; font-size: 16px; }
 
 .stat-row {
-  display: flex; gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 4px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 4px;
 }
 .stat {
   background: var(--surface-2);
   border-radius: 6px;
-  padding: 6px 10px;
-  min-width: 48px;
+  padding: 6px 4px;
   text-align: center;
+  min-width: 0;
 }
-.stat .lbl { display: block; font-size: 11px; color: var(--muted); }
-.stat .val { display: block; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .lbl { display: block; font-size: 10px; color: var(--muted); letter-spacing: 0.05em; }
+.stat .val { display: block; font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; }
 
-.weapon { padding: 8px 0; border-bottom: 1px dashed var(--border); }
-.weapon:last-child { border-bottom: none; }
-.weapon-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.weapon-name { font-weight: 600; }
-.weapon-stats { display: flex; gap: 4px; flex-wrap: wrap; margin: 4px 0; }
 .chip {
   background: var(--surface-2);
   font-size: 12px;
@@ -137,7 +132,153 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: 4px;
   font-variant-numeric: tabular-nums;
 }
-.weapon-desc { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+/* ---------- Wahapedia-style datasheet ---------- */
+
+.ds-banner {
+  margin: 4px 0 12px;
+  padding: 12px 14px;
+  background: linear-gradient(180deg, var(--surface), var(--bg));
+  border-left: 4px solid var(--accent);
+  border-radius: 6px;
+}
+.ds-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.ds-role {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.ds-cost-row { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+
+.model-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin: 6px 0 4px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Weapon table — horizontally scrollable on narrow screens so the name
+   column never collapses below readability. */
+.weapon-card { padding: 0; overflow-x: auto; }
+.wpn-section-head {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  left: 0;
+}
+.weapon-card.ranged .wpn-row { grid-template-columns: minmax(140px, 1fr) 40px 26px 26px 26px 26px 26px; }
+.weapon-card.melee  .wpn-row { grid-template-columns: minmax(140px, 1fr) 26px 26px 26px 26px 26px; }
+.weapon-card.ranged .wpn-row { min-width: 310px; }
+.weapon-card.melee  .wpn-row { min-width: 270px; }
+.wpn-row {
+  display: grid;
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+.wpn-row:last-child { border-bottom: none; }
+.wpn-head {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  text-transform: uppercase;
+  background: var(--bg);
+}
+.wpn-head .wpn-stat-cell { padding: 4px 2px; }
+.wpn-head .wpn-name-cell { padding: 4px 10px; }
+
+.wpn-name-cell {
+  padding: 8px 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+.wpn-stat-cell {
+  padding: 8px 2px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  font-size: 13px;
+  border-left: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.wpn-name { font-weight: 600; overflow-wrap: anywhere; }
+.wpn-tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 3px; }
+.wpn-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 1px 4px;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.wpn-tag .kw-link { color: inherit; }
+
+/* Abilities */
+.ability-group {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  padding: 6px 0;
+}
+.ability-block { padding: 8px 0; border-bottom: 1px dashed var(--border); }
+.ability-block:last-child { border-bottom: none; }
+.ability-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.ability-name { font-weight: 600; }
+.ability-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.ability-tag.tag-core    { background: rgba(120, 180, 255, 0.18); color: #8ec4ff; }
+.ability-tag.tag-faction { background: var(--accent-soft);       color: var(--accent); }
+.ability-tag.tag-wargear { background: rgba(160, 200, 140, 0.18); color: #b8d49d; }
+
+/* Keywords */
+.kw-card .kw-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.kw-chip {
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  letter-spacing: 0.03em;
+}
+.kw-chip.kw-faction {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+.kw-faction-label {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 
 .kwb { color: var(--accent); font-weight: 600; }
 

@@ -257,24 +257,27 @@
     if (!ds) return el('div', { class: 'empty' }, 'Unit not found.');
     setTitle(ds.name);
 
-    const out = el('div');
-    out.append(el('div', {}, [
-      el('h2', {}, ds.name),
-      ds.role ? el('div', { class: 'sub', style: 'color:var(--muted);font-size:14px' }, ds.role) : null,
+    const out = el('div', { class: 'datasheet' });
+
+    // Banner: unit name + role + points pills (Wahapedia-style header band).
+    out.append(el('div', { class: 'ds-banner' }, [
+      el('div', { class: 'ds-name' }, ds.name),
+      ds.role ? el('div', { class: 'ds-role' }, ds.role) : null,
       ds.costs && ds.costs.length
-        ? el('div', { style: 'margin-top:6px' },
-            ds.costs.map(c => el('span', { class: 'pts' }, `${c.cost} pts — ${c.description}`)))
+        ? el('div', { class: 'ds-cost-row' },
+            ds.costs.map(c => el('span', { class: 'pts' }, `${c.cost} pts · ${c.description}`)))
         : null,
     ].filter(Boolean)));
 
+    // Stat block.
     if (ds.models && ds.models.length) {
-      const card = el('div', { class: 'card' }, el('h3', {}, 'Stats'));
+      const card = el('div', { class: 'card' });
       for (const m of ds.models) {
-        if (ds.models.length > 1) card.append(el('h4', {}, m.name));
+        if (ds.models.length > 1) card.append(el('div', { class: 'model-name' }, m.name));
         const row = el('div', { class: 'stat-row' });
-        const stats = [['M', m.M], ['T', m.T], ['Sv', m.Sv]];
-        if (m.invSv && m.invSv !== '-') stats.push(['Inv', m.invSv]);
-        stats.push(['W', m.W], ['Ld', m.Ld], ['OC', m.OC]);
+        const stats = [['M', m.M], ['T', m.T], ['SV', m.Sv]];
+        if (m.invSv && m.invSv !== '-') stats.push(['INV', m.invSv]);
+        stats.push(['W', m.W], ['LD', m.Ld], ['OC', m.OC]);
         for (const [lbl, val] of stats) {
           row.append(el('div', { class: 'stat' }, [
             el('span', { class: 'lbl' }, lbl),
@@ -287,43 +290,44 @@
       out.append(card);
     }
 
-    function weaponSection(title, melee) {
-      const items = (ds.weapons || []).filter(w => w.isMelee === melee);
-      if (!items.length) return null;
-      const card = el('div', { class: 'card' }, el('h3', {}, title));
-      for (const w of items) {
-        const stats = el('div', { class: 'weapon-stats' });
-        if (!melee && w.range) stats.append(el('span', { class: 'chip' }, `Range ${w.range}"`));
-        for (const [lbl, val] of [
-          ['A', w.A], [melee ? 'WS' : 'BS', w.BS_WS],
-          ['S', w.S], ['AP', w.AP], ['D', w.D],
-        ]) {
-          stats.append(el('span', { class: 'chip' }, `${lbl} ${val ?? '—'}`));
-        }
-        const wrap = el('div', { class: 'weapon' }, [
-          el('div', { class: 'weapon-head' }, el('span', { class: 'weapon-name' }, w.name)),
-          stats,
-        ]);
-        if (w.description) {
-          const d = el('div', { class: 'weapon-desc' });
-          d.appendChild(renderRulesHTML(w.description));
-          wrap.append(d);
-        }
-        card.append(wrap);
-      }
-      return card;
-    }
-    out.append(weaponSection('Ranged Weapons', false));
-    out.append(weaponSection('Melee Weapons', true));
+    out.append(weaponTable(ds, false));
+    out.append(weaponTable(ds, true));
 
-    const validAbilities = (ds.abilities || []).filter(a => a.name || a.description);
-    if (validAbilities.length) {
-      const card = el('div', { class: 'card' }, el('h3', {}, 'Abilities'));
-      for (const a of validAbilities) {
-        const block = el('div', { style: 'margin: 8px 0' });
-        if (a.name) block.append(el('div', { style: 'font-weight:600' }, a.name));
-        if (a.description) block.appendChild(renderRulesHTML(a.description));
-        card.append(block);
+    // Abilities — Wahapedia groups by type. Core comes first as badges,
+    // then Faction, then named (Datasheet) and Wargear abilities as cards.
+    const valid = (ds.abilities || []).filter(a => a.name || a.description);
+    const byType = {};
+    for (const a of valid) {
+      const t = (a.type || 'Other').replace(/\s*\(.*\)\s*$/, '').trim() || 'Other';
+      (byType[t] ||= []).push(a);
+    }
+    if (Object.keys(byType).length) {
+      const card = el('div', { class: 'card' });
+      card.append(el('h3', {}, 'Abilities'));
+
+      if (byType.Core && byType.Core.length) {
+        const names = [...new Set(byType.Core.map(a => a.name).filter(Boolean))];
+        card.append(el('div', { class: 'ability-group' }, [
+          el('span', { class: 'ability-tag tag-core' }, 'CORE'),
+          el('span', {}, names.join(', ') || '—'),
+        ]));
+      }
+      if (byType.Faction && byType.Faction.length) {
+        for (const a of byType.Faction) {
+          card.append(abilityBlock(a, 'FACTION', 'tag-faction'));
+        }
+      }
+      const namedTypes = ['Datasheet', 'Wargear', 'Wargear profile', 'Primarch', 'Special', 'Fortification', 'Other'];
+      for (const t of namedTypes) {
+        if (!byType[t]) continue;
+        for (const a of byType[t]) {
+          if (!a.name && !a.description) continue;
+          // 'Datasheet' is the default type for a unit's named abilities;
+          // showing a badge would just be visual noise.
+          const badge = t === 'Datasheet' ? null : t.toUpperCase();
+          const tagClass = t === 'Wargear' || t === 'Wargear profile' ? 'tag-wargear' : '';
+          card.append(abilityBlock(a, badge, tagClass));
+        }
       }
       out.append(card);
     }
@@ -343,13 +347,66 @@
     if (ds.keywords && ds.keywords.length) {
       const unit = [...new Set(ds.keywords.filter(k => !k.isFactionKeyword).map(k => k.keyword))].sort();
       const fac = [...new Set(ds.keywords.filter(k => k.isFactionKeyword).map(k => k.keyword))].sort();
-      const card = el('div', { class: 'card' }, el('h3', {}, 'Keywords'));
-      if (unit.length) card.append(el('div', { style: 'font-size:14px' }, unit.join(', ')));
-      if (fac.length) card.append(el('div', { class: 'sub' }, 'Faction: ' + fac.join(', ')));
+      const card = el('div', { class: 'card kw-card' }, el('h3', {}, 'Keywords'));
+      if (unit.length) {
+        card.append(el('div', { class: 'kw-list' }, unit.map(k => el('span', { class: 'kw-chip' }, k))));
+      }
+      if (fac.length) {
+        card.append(el('div', { class: 'kw-faction-label' }, 'Faction Keywords'));
+        card.append(el('div', { class: 'kw-list' }, fac.map(k => el('span', { class: 'kw-chip kw-faction' }, k))));
+      }
       out.append(card);
     }
 
     return out;
+  }
+
+  // Render a Wahapedia-style weapon table: column headers + a row per weapon
+  // with the keyword list on a second sub-row underneath the name.
+  function weaponTable(ds, melee) {
+    const items = (ds.weapons || []).filter(w => w.isMelee === melee);
+    if (!items.length) return null;
+    const cols = melee
+      ? ['A', 'WS', 'S', 'AP', 'D']
+      : ['RANGE', 'A', 'BS', 'S', 'AP', 'D'];
+    const wrap = el('div', { class: `card weapon-card ${melee ? 'melee' : 'ranged'}` });
+    wrap.append(el('div', { class: 'wpn-section-head' }, melee ? 'Melee Weapons' : 'Ranged Weapons'));
+
+    const head = el('div', { class: 'wpn-row wpn-head' });
+    head.append(el('div', { class: 'wpn-name-cell' }, ''));
+    for (const c of cols) head.append(el('div', { class: 'wpn-stat-cell' }, c));
+    wrap.append(head);
+
+    for (const w of items) {
+      const row = el('div', { class: 'wpn-row' });
+      const nameCell = el('div', { class: 'wpn-name-cell' });
+      nameCell.append(el('div', { class: 'wpn-name' }, w.name));
+      if (w.description) {
+        const tags = el('div', { class: 'wpn-tags' });
+        const parts = String(w.description)
+          .split(',').map(s => s.trim()).filter(Boolean);
+        for (const p of parts) tags.append(el('span', { class: 'wpn-tag' }, `[${p.toUpperCase()}]`));
+        linkifyKeywords(tags);
+        nameCell.append(tags);
+      }
+      row.append(nameCell);
+      const cells = melee
+        ? [w.A, w.BS_WS, w.S, w.AP, w.D]
+        : [w.range ? `${w.range}"` : '—', w.A, w.BS_WS, w.S, w.AP, w.D];
+      for (const v of cells) row.append(el('div', { class: 'wpn-stat-cell' }, v ?? '—'));
+      wrap.append(row);
+    }
+    return wrap;
+  }
+
+  function abilityBlock(a, badge, tagClass) {
+    const block = el('div', { class: 'ability-block' });
+    const head = el('div', { class: 'ability-head' });
+    if (badge) head.append(el('span', { class: `ability-tag ${tagClass || ''}` }, badge));
+    if (a.name) head.append(el('span', { class: 'ability-name' }, a.name));
+    block.append(head);
+    if (a.description) block.appendChild(renderRulesHTML(a.description));
+    return block;
   }
 
   // ---------------- Views: Detachments ----------------

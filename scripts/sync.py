@@ -32,6 +32,7 @@ UA = (
 CSV_FILES = [
     "Last_update",
     "Factions",
+    "Source",
     "Datasheets",
     "Datasheets_models",
     "Datasheets_wargear",
@@ -151,10 +152,27 @@ def build_bundles(csvs: dict[str, list[dict]]) -> tuple[dict, dict[str, dict], l
     )
     print(f"  Boarding Actions filter: dropping {len(ba_detachment_ids)} detachments", flush=True)
 
-    # Drop datasheets sourced from the Boarding Actions Companion (source_id=000000285).
-    # Currently zero rows match — Wahapedia hosts BA detachments separately but
-    # not BA-specific datasheet variants — but we filter defensively.
-    datasheets = [d for d in datasheets if d.get("source_id") != "000000285"]
+    # Source-based filters: drop Legends datasheets (and the BA expansion
+    # source 000000285, kept here for parity even though it has 0 datasheets).
+    sources = csvs.get("Source", [])
+    legends_source_ids = {
+        s["id"] for s in sources
+        if s.get("id") and "legends" in (s.get("name") or "").lower()
+    }
+    drop_source_ids = legends_source_ids | {"000000285"}
+    before = len(datasheets)
+    datasheets = [d for d in datasheets if d.get("source_id") not in drop_source_ids]
+    print(f"  Legends filter: dropping {before - len(datasheets)} datasheets "
+          f"({len(legends_source_ids)} Legends sources)", flush=True)
+    valid_ds_ids = {d["id"] for d in datasheets}
+
+    # Cascade: drop any child rows whose datasheet_id is no longer valid.
+    models = [r for r in models if r.get("datasheet_id") in valid_ds_ids]
+    wargear = [r for r in wargear if r.get("datasheet_id") in valid_ds_ids]
+    abilities = [r for r in abilities if r.get("datasheet_id") in valid_ds_ids]
+    keywords = [r for r in keywords if r.get("datasheet_id") in valid_ds_ids]
+    composition = [r for r in composition if r.get("datasheet_id") in valid_ds_ids]
+    costs = [r for r in costs if r.get("datasheet_id") in valid_ds_ids]
 
     # Drop BA detachments from the rule tables before any further processing.
     detachment_abilities = [r for r in detachment_abilities if r.get("detachment_id") not in ba_detachment_ids]
