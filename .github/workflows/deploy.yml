@@ -35,6 +35,12 @@ jobs:
           mkdir -p dist
           cp -r web/. dist/
           python scripts/sync.py dist/data
+          # Stamp a unique cache version into the service worker so each
+          # deploy invalidates the previous shell cache. Using the short
+          # commit SHA means a no-op cron rebuild keeps the same cache,
+          # while a real source change rolls it forward.
+          sed -i "s/__BUILD_ID__/${GITHUB_SHA::7}/" dist/sw.js
+          echo "Service worker stamped with build ID: ${GITHUB_SHA::7}"
 
       - uses: actions/configure-pages@v5
 

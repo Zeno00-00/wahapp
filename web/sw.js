@@ -1,6 +1,8 @@
 // Cache-first for the app shell, stale-while-revalidate for data.
-// Bump CACHE on each shell change so phones pick up the new version.
-const CACHE = 'wahapp-v1';
+// __BUILD_ID__ is replaced by the GitHub Actions workflow with the short
+// commit SHA on every deploy, so a new shell invalidates the old cache
+// automatically. Locally the literal placeholder is a valid (static) name.
+const CACHE = 'wahapp-__BUILD_ID__';
 const SHELL = [
   './',
   'index.html',
