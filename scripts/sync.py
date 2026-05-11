@@ -721,6 +721,10 @@ def fetch_tournaments() -> list[dict]:
 
 def _project_event(e: dict) -> dict:
     coord = e.get("coordinate") or [None, None]
+    # BCP returns ticketPrice in the smallest currency unit (cents for USD).
+    # pricingDict has the same value keyed by currency code.
+    price_cents = e.get("ticketPrice")
+    pricing = e.get("pricingDict") or {}
     return {
         "id": e.get("id"),
         "name": e.get("name") or "(Untitled event)",
@@ -733,8 +737,12 @@ def _project_event(e: dict) -> dict:
         "address": e.get("formatted_address"),
         "lat": coord[1] if coord else None,
         "lon": coord[0] if coord else None,
-        "registeredPlayers": e.get("totalPlayers") or e.get("registeredPlayers"),
+        "registeredPlayers": e.get("totalPlayers"),
         "checkedInPlayers": e.get("checkedInPlayers"),
+        "numTickets": e.get("numTickets"),       # 0 = unlimited / not configured
+        "ticketPriceCents": price_cents,
+        "pricingDict": pricing or None,
+        "usingOnlineReg": bool(e.get("usingOnlineReg")),
         "rounds": e.get("numberOfRounds") or e.get("currentRound"),
         "ended": bool(e.get("ended")),
         "description": e.get("description"),

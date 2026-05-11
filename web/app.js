@@ -823,11 +823,41 @@
       meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Where: '), addr]));
     }
     if (e.registeredPlayers != null) {
-      meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Players: '), String(e.registeredPlayers)]));
+      meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Registered: '), String(e.registeredPlayers)]));
     }
     if (e.rounds) {
       meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Rounds: '), String(e.rounds)]));
     }
+
+    // Tickets — BCP convention: numTickets=0 means unlimited/not configured.
+    if (e.numTickets && e.numTickets > 0) {
+      const taken = e.registeredPlayers || 0;
+      const remaining = Math.max(0, e.numTickets - taken);
+      const tag = remaining === 0 ? 'tickets-sold-out'
+                : remaining <= 3   ? 'tickets-low'
+                                   : 'tickets-ok';
+      meta.append(el('div', {}, [
+        el('span', { class: 'sub' }, 'Tickets: '),
+        el('span', { class: `tickets ${tag}` },
+          remaining === 0 ? `Sold out (${taken}/${e.numTickets})`
+                          : `${remaining} of ${e.numTickets} left`),
+      ]));
+    } else if (e.usingOnlineReg && e.numTickets === 0) {
+      meta.append(el('div', {}, [
+        el('span', { class: 'sub' }, 'Tickets: '),
+        'No cap',
+      ]));
+    }
+
+    // Price — cents → dollars (or fallback to pricingDict for non-USD).
+    if (typeof e.ticketPriceCents === 'number') {
+      const usd = e.ticketPriceCents;
+      let priceLabel;
+      if (usd === 0) priceLabel = 'Free';
+      else priceLabel = `$${(usd / 100).toFixed(2)} USD`;
+      meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Price: '), priceLabel]));
+    }
+
     card.append(meta);
 
     if (e.description) {
