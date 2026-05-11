@@ -369,6 +369,121 @@ details summary::-webkit-details-marker { display: none; }
 }
 .error { color: var(--danger); padding: 12px 0; }
 
+/* ---------- Tournaments ---------- */
+.tournaments .tourn-meta { margin: 4px 0 12px; font-size: 13px; }
+.cal-card { padding: 12px; margin: 8px 0; }
+.cal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.cal-title { font-weight: 700; font-size: 15px; letter-spacing: 0.02em; }
+.cal-nav {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 36px; height: 32px;
+  font-size: 18px;
+  cursor: pointer;
+}
+.cal-nav:hover { background: var(--accent-soft); color: var(--accent); }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+.cal-dow { margin-bottom: 4px; }
+.cal-dow-cell {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  padding: 4px 0;
+}
+.cal-cell {
+  aspect-ratio: 1 / 1;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px;
+  cursor: pointer;
+  position: relative;
+  font-variant-numeric: tabular-nums;
+}
+.cal-cell:disabled { opacity: 0.35; cursor: default; }
+.cal-cell.cal-other { background: transparent; }
+.cal-cell.cal-has:not(:disabled) { background: var(--accent-soft); color: var(--text); }
+.cal-cell.cal-today { border-color: var(--accent); }
+.cal-cell.cal-selected { background: var(--accent); color: #1a1a1a; }
+.cal-cell.cal-selected .cal-dot { background: rgba(0,0,0,0.2); color: #1a1a1a; }
+.cal-day { font-weight: 600; }
+.cal-dot {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #1a1a1a;
+}
+
+.list-head {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tournament-list .tourn-date-head {
+  margin-top: 10px;
+  padding: 8px 4px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border-bottom: none;
+}
+.tournament-list .tourn-date-head:first-child { margin-top: 0; }
+
+.tournament-detail .tourn-meta {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 12px;
+  font-size: 14px;
+}
+.tournament-detail .tourn-meta .sub { display: inline; margin-right: 4px; }
+.tournament-detail .tourn-desc {
+  white-space: pre-wrap;
+  margin: 10px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.tourn-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.btn-link {
+  display: inline-block;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+}
+.btn-link:hover { background: var(--accent); color: #1a1a1a; }
+
 /* Rule section content (sanitized HTML from core rules scraper). */
 .rules h3 {
   margin: 18px 0 6px;

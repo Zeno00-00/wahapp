@@ -24,6 +24,7 @@
     rules: null,
     keywords: null,
     kwIndex: null,       // { re, bySlug, byLower } built from keywords
+    tournaments: null,
   };
 
   async function loadIndex() {
@@ -54,6 +55,12 @@
     cache.keywords = r.ok ? await r.json() : { keywords: [] };
     cache.kwIndex = buildKeywordIndex(cache.keywords.keywords);
     return cache.keywords;
+  }
+  async function loadTournaments() {
+    if (cache.tournaments) return cache.tournaments;
+    const r = await fetch('data/tournaments.json');
+    cache.tournaments = r.ok ? await r.json() : { events: [], fetchedAt: null };
+    return cache.tournaments;
   }
 
   // ---------------- Keyword linkifier ----------------
@@ -643,6 +650,213 @@
     return card;
   }
 
+  // ---------------- Views: Tournaments ----------------
+
+  const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+                       'July', 'August', 'September', 'October', 'November', 'December'];
+  const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+  function ymd(d) {
+    // Format a Date as local YYYY-MM-DD (matches the event.date strings).
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+  function parseYmd(s) {
+    // Build a local-time Date so "today" comparisons aren't off by UTC drift.
+    const [y, m, d] = s.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+
+  async function viewTournaments() {
+    setTitle('Tournaments');
+    const t = await loadTournaments();
+    const events = (t.events || []).filter(e => e.date);
+    if (!events.length) {
+      return el('div', { class: 'empty' },
+        'No tournaments available right now. The daily sync may have failed — check back tomorrow.');
+    }
+
+    // Bucket events by date so calendar lookups are O(1).
+    const byDate = new Map();
+    for (const e of events) {
+      const arr = byDate.get(e.date) || [];
+      arr.push(e);
+      byDate.set(e.date, arr);
+    }
+
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const firstEvent = parseYmd(events[0].date);
+    let cursorYear = (firstEvent < today ? today : firstEvent).getFullYear();
+    let cursorMonth = (firstEvent < today ? today : firstEvent).getMonth();
+    let selectedDate = null;  // null = show all upcoming
+
+    const wrap = el('div', { class: 'tournaments' });
+    const meta = el('div', { class: 'tourn-meta sub' },
+      `Within ${t.radiusMi || 200} mi of ${t.center?.label || 'New York, NY'} · ${events.length} events`);
+    wrap.append(meta);
+
+    const cal = el('div', { class: 'cal-card card' });
+    const listWrap = el('div');
+    wrap.append(cal, listWrap);
+
+    function render() {
+      renderCalendar();
+      renderList();
+    }
+
+    function renderCalendar() {
+      cal.replaceChildren();
+      // Header: month label + prev/next.
+      const head = el('div', { class: 'cal-head' });
+      const prev = el('button', { class: 'cal-nav', 'aria-label': 'Previous month' }, '‹');
+      const next = el('button', { class: 'cal-nav', 'aria-label': 'Next month' }, '›');
+      prev.addEventListener('click', () => {
+        if (--cursorMonth < 0) { cursorMonth = 11; cursorYear--; }
+        selectedDate = null;
+        render();
+      });
+      next.addEventListener('click', () => {
+        if (++cursorMonth > 11) { cursorMonth = 0; cursorYear++; }
+        selectedDate = null;
+        render();
+      });
+      head.append(prev, el('div', { class: 'cal-title' }, `${MONTH_NAMES[cursorMonth]} ${cursorYear}`), next);
+      cal.append(head);
+
+      // Day-of-week header row.
+      const dow = el('div', { class: 'cal-grid cal-dow' });
+      for (const d of DAY_LETTERS) dow.append(el('div', { class: 'cal-dow-cell' }, d));
+      cal.append(dow);
+
+      // Day cells.
+      const grid = el('div', { class: 'cal-grid' });
+      const firstOfMonth = new Date(cursorYear, cursorMonth, 1);
+      const startDay = firstOfMonth.getDay();  // 0 = Sun
+      const daysInMonth = new Date(cursorYear, cursorMonth + 1, 0).getDate();
+      const totalCells = Math.ceil((startDay + daysInMonth) / 7) * 7;
+      for (let i = 0; i < totalCells; i++) {
+        const dayNum = i - startDay + 1;
+        const inMonth = dayNum >= 1 && dayNum <= daysInMonth;
+        const cellDate = new Date(cursorYear, cursorMonth, dayNum);
+        const iso = inMonth ? ymd(cellDate) : '';
+        const dayEvents = (inMonth && byDate.get(iso)) || [];
+        const isToday = inMonth && cellDate.getTime() === today.getTime();
+        const isSelected = inMonth && iso === selectedDate;
+
+        const cell = el('button', {
+          class: [
+            'cal-cell',
+            inMonth ? '' : 'cal-other',
+            dayEvents.length ? 'cal-has' : '',
+            isToday ? 'cal-today' : '',
+            isSelected ? 'cal-selected' : '',
+          ].filter(Boolean).join(' '),
+        });
+        cell.disabled = !dayEvents.length;
+        cell.append(el('span', { class: 'cal-day' }, inMonth ? String(dayNum) : ''));
+        if (dayEvents.length) cell.append(el('span', { class: 'cal-dot' }, String(dayEvents.length)));
+        cell.addEventListener('click', () => {
+          if (!dayEvents.length) return;
+          selectedDate = (selectedDate === iso) ? null : iso;
+          render();
+        });
+        grid.append(cell);
+      }
+      cal.append(grid);
+    }
+
+    function renderList() {
+      listWrap.replaceChildren();
+      let toShow;
+      if (selectedDate) {
+        listWrap.append(el('div', { class: 'list-head' },
+          `Events on ${formatDate(selectedDate)} — tap a day on the calendar again to clear`));
+        toShow = byDate.get(selectedDate) || [];
+      } else {
+        listWrap.append(el('div', { class: 'list-head' }, 'Upcoming events'));
+        toShow = events.filter(e => e.date >= ymd(today));
+      }
+      if (!toShow.length) {
+        listWrap.append(el('div', { class: 'empty' }, 'Nothing scheduled.'));
+        return;
+      }
+      let lastDate = null;
+      const ul = el('ul', { class: 'list tournament-list' });
+      for (const e of toShow) {
+        if (e.date !== lastDate) {
+          ul.append(el('li', { class: 'tourn-date-head' }, formatDate(e.date)));
+          lastDate = e.date;
+        }
+        ul.append(el('li', {}, el('a', { href: `#/tournament/${e.id}` }, [
+          el('div', { style: 'font-weight:600' }, e.name),
+          el('span', { class: 'sub' },
+            [e.city, e.country].filter(Boolean).join(', ')
+            || e.locationName || ''),
+        ])));
+      }
+      listWrap.append(ul);
+    }
+
+    render();
+    return wrap;
+  }
+
+  async function viewTournament(id) {
+    const t = await loadTournaments();
+    const e = (t.events || []).find(x => x.id === id);
+    if (!e) return el('div', { class: 'empty' }, 'Event not found.');
+    setTitle(e.name);
+
+    const card = el('div', { class: 'card tournament-detail' });
+    card.append(el('h2', { style: 'margin: 0 0 6px' }, e.name));
+
+    const meta = el('div', { class: 'tourn-meta' });
+    const dateLine = e.endDate && e.endDate !== e.date
+      ? `${formatDate(e.date)} – ${formatDate(e.endDate)}`
+      : formatDate(e.date);
+    meta.append(el('div', {}, [el('span', { class: 'sub' }, 'When: '), dateLine]));
+    if (e.address || e.locationName || e.city) {
+      const addr = [e.locationName, e.address].filter(Boolean).join(' — ')
+                 || [e.city, e.country].filter(Boolean).join(', ');
+      meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Where: '), addr]));
+    }
+    if (e.registeredPlayers != null) {
+      meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Players: '), String(e.registeredPlayers)]));
+    }
+    if (e.rounds) {
+      meta.append(el('div', {}, [el('span', { class: 'sub' }, 'Rounds: '), String(e.rounds)]));
+    }
+    card.append(meta);
+
+    if (e.description) {
+      card.append(el('div', { class: 'tourn-desc' }, e.description));
+    }
+
+    const links = el('div', { class: 'tourn-links' });
+    links.append(el('a', { class: 'btn-link', href: e.url, target: '_blank', rel: 'noopener' }, 'View on Best Coast Pairings ↗'));
+    if (e.lat && e.lon) {
+      const q = e.address ? encodeURIComponent(e.address)
+                          : `${e.lat},${e.lon}`;
+      links.append(el('a', { class: 'btn-link', href: `https://maps.apple.com/?q=${q}`, target: '_blank', rel: 'noopener' }, 'Open in Maps ↗'));
+    }
+    card.append(links);
+
+    if (t.fetchedAt) {
+      card.append(el('div', { class: 'sub', style: 'margin-top:14px;font-size:11px' },
+        `Data fetched ${new Date(t.fetchedAt).toLocaleString()}`));
+    }
+    return card;
+  }
+
+  function formatDate(iso) {
+    // "2026-05-16" → "Sat, May 16, 2026"
+    if (!iso) return '';
+    const d = parseYmd(iso);
+    return d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  }
+
   // ---------------- Views: About ----------------
 
   async function viewAbout() {
@@ -675,6 +889,8 @@
     { re: /^#\/rules\/([^/]+)\/?$/, handler: (m) => viewRulesSection(m[1]), tab: 'rules' },
     { re: /^#\/keywords\/?$/, handler: viewKeywords, tab: 'keywords' },
     { re: /^#\/keyword\/([^/]+)\/?$/, handler: (m) => viewKeyword(m[1]), tab: 'keywords' },
+    { re: /^#\/tournaments\/?$/, handler: viewTournaments, tab: 'tournaments' },
+    { re: /^#\/tournament\/([^/]+)\/?$/, handler: (m) => viewTournament(m[1]), tab: 'tournaments' },
     { re: /^#\/about\/?$/, handler: viewAbout, tab: 'about' },
   ];
 

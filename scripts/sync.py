@@ -15,8 +15,10 @@ Wahapedia 403s default user agents; we send a real Safari UA.
 import json
 import re
 import sys
+import urllib.parse
 import urllib.request
 import urllib.error
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -648,6 +650,135 @@ def sync_core_rules(out_dir: Path, html=None) -> None:
     print(f"  rules.json: {len(sections)} sections, {target.stat().st_size // 1024} KB", flush=True)
 
 
+# ---------------- Tournaments (Best Coast Pairings) ----------------
+# We hit BCP's public API directly. Reverse-engineered from the React bundle:
+#   - host: newprod-api.bestcoastpairings.com/v1
+#   - header: client-id: web-app
+#   - the "location" param is a JSON-stringified {distance, center:{lat,long}}
+#     rather than separate lat/lng/distance fields, which is why my initial
+#     attempts with flat params returned globally-sorted events.
+# The Action is rate-friendly: one paginated fetch per day.
+
+BCP_API = "https://newprod-api.bestcoastpairings.com/v1/events"
+BCP_CLIENT_ID = "web-app"
+WH40K_GAME_SYSTEM_ID = "WGMSzfKFYA"
+NYC_LAT, NYC_LON = 40.7128, -74.0060   # New York, NY
+SEARCH_RADIUS_MI = 200
+DAYS_AHEAD = 90
+
+
+def _bcp_get(params: dict) -> dict:
+    url = BCP_API + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "User-Agent": UA,
+        "client-id": BCP_CLIENT_ID,
+        "Accept": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_tournaments() -> list[dict]:
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    end = today + timedelta(days=DAYS_AHEAD)
+    location = json.dumps(
+        {"distance": SEARCH_RADIUS_MI, "center": {"lat": NYC_LAT, "long": NYC_LON}},
+        separators=(",", ":"),
+    )
+    base_params = {
+        "gameSystemId": WH40K_GAME_SYSTEM_ID,
+        "location": location,
+        "startDate": today.strftime("%Y-%m-%dT00:00:00.000Z"),
+        "endDate": end.strftime("%Y-%m-%dT00:00:00.000Z"),
+        "limit": 100,
+        "sortKey": "eventDate",
+    }
+    out: list[dict] = []
+    seen_ids: set[str] = set()
+    next_key = None
+    for _ in range(20):  # hard cap on pages
+        params = dict(base_params)
+        if next_key:
+            params["nextKey"] = next_key
+        data = _bcp_get(params)
+        for e in data.get("data") or []:
+            if not e.get("id") or e["id"] in seen_ids:
+                continue
+            if e.get("isOnlineEvent"):
+                continue
+            # The API occasionally returns matches whose gameSystem doesn't
+            # match (rare, but happens in shared events); double-check.
+            gs_name = (e.get("gameSystemName") or "").lower()
+            if gs_name and "40k" not in gs_name and "40,000" not in gs_name:
+                continue
+            seen_ids.add(e["id"])
+            out.append(_project_event(e))
+        next_key = data.get("nextKey")
+        if not next_key:
+            break
+    return out
+
+
+def _project_event(e: dict) -> dict:
+    coord = e.get("coordinate") or [None, None]
+    return {
+        "id": e.get("id"),
+        "name": e.get("name") or "(Untitled event)",
+        "date": (e.get("eventDate") or "")[:10],          # YYYY-MM-DD
+        "endDate": (e.get("eventEndDate") or "")[:10],
+        "timeZone": e.get("timeZone"),
+        "city": e.get("city"),
+        "country": e.get("country"),
+        "locationName": e.get("locationName"),
+        "address": e.get("formatted_address"),
+        "lat": coord[1] if coord else None,
+        "lon": coord[0] if coord else None,
+        "registeredPlayers": e.get("totalPlayers") or e.get("registeredPlayers"),
+        "checkedInPlayers": e.get("checkedInPlayers"),
+        "rounds": e.get("numberOfRounds") or e.get("currentRound"),
+        "ended": bool(e.get("ended")),
+        "description": e.get("description"),
+        "url": f"https://www.bestcoastpairings.com/event/{e.get('id')}",
+    }
+
+
+def validate_tournaments(events: list[dict]) -> tuple[bool, str]:
+    if not isinstance(events, list):
+        return False, "events not a list"
+    if not events:
+        # Empty is plausible during slow periods; only fail if the structure broke.
+        return True, "empty (no events in window)"
+    for e in events[:5]:
+        if not e.get("id") or not e.get("name") or not e.get("date"):
+            return False, f"missing required fields on event {e}"
+    return True, "ok"
+
+
+def sync_tournaments(out_dir: Path) -> None:
+    target = out_dir / "tournaments.json"
+    try:
+        events = fetch_tournaments()
+        ok, reason = validate_tournaments(events)
+        if not ok:
+            raise ValueError(f"validation failed: {reason}")
+    except Exception as e:
+        if target.exists():
+            print(f"WARN: tournaments fetch failed ({e}); keeping existing tournaments.json", flush=True)
+        else:
+            print(f"WARN: tournaments fetch failed ({e}); no prior file", flush=True)
+        return
+    payload = {
+        "events": events,
+        "fetchedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "center": {"label": "New York, NY", "lat": NYC_LAT, "lon": NYC_LON},
+        "radiusMi": SEARCH_RADIUS_MI,
+        "daysAhead": DAYS_AHEAD,
+    }
+    target.write_text(json.dumps(payload, ensure_ascii=False))
+    print(f"  tournaments.json: {len(events)} events, "
+          f"{target.stat().st_size // 1024} KB", flush=True)
+
+
 def main():
     out_dir = Path(sys.argv[1] if len(sys.argv) > 1 else "dist/data")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -672,6 +803,9 @@ def main():
         rules_html = None
     sync_core_rules(out_dir, html=rules_html)
     sync_keywords(out_dir, html=rules_html)
+
+    print("Fetching tournaments from Best Coast Pairings...", flush=True)
+    sync_tournaments(out_dir)
 
     # Add rule sections + keywords to the search index. (The web app uses
     # per-tab search now, but the legacy combined search.json file still
