@@ -711,6 +711,10 @@ def fetch_tournaments() -> list[dict]:
             gs_name = (e.get("gameSystemName") or "").lower()
             if gs_name and "40k" not in gs_name and "40,000" not in gs_name:
                 continue
+            # Skip small/empty events — under 6 registered players is below
+            # what the user wants to see. Treats missing as 0 (drop).
+            if (e.get("totalPlayers") or 0) < 6:
+                continue
             seen_ids.add(e["id"])
             out.append(_project_event(e))
         next_key = data.get("nextKey")
