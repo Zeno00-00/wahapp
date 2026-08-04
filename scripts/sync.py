@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-BASE = "https://wahapedia.ru/wh40k10ed/"
+BASE = "https://wahapedia.ru/wh40k11ed/"
 UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
@@ -481,18 +481,19 @@ def scrape_core_rules(html: str) -> list[dict]:
 
 
 def validate_rules(sections: list[dict]) -> tuple[bool, str]:
-    """Sanity-check the scrape. Returns (ok, reason)."""
-    if len(sections) < 20:
-        return False, f"only {len(sections)} sections (expected at least 20)"
-    short = [s["title"] for s in sections if len(s["html"]) < 50]
-    if len(short) > len(sections) // 3:
-        return False, f"too many empty/short sections: {short[:5]}…"
-    # Anchor sanity: a few well-known section titles should be present.
-    titles = {s["title"].lower() for s in sections}
-    required = {"battlefield", "dice", "1. command", "1. hit roll"}
-    missing = [t for t in required if t not in titles]
-    if missing:
-        return False, f"missing required sections: {missing}"
+    """Sanity-check the scrape. Returns (ok, reason).
+
+    11e has ~90 numbered h2 sub-sections. We anchor on prefix substrings
+    rather than full slugs so a renumber doesn't fail the whole build.
+    """
+    if len(sections) < 40:
+        return False, f"only {len(sections)} sections (expected at least 40)"
+    slugs = {s["slug"] for s in sections}
+    def has_prefix(prefix: str) -> bool:
+        return any(s.startswith(prefix) for s in slugs)
+    for prefix in ("dice", "1-hit-roll", "2-wound-roll", "basic-rules"):
+        if not has_prefix(prefix):
+            return False, f"no section with prefix {prefix!r}"
     return True, "ok"
 
 
@@ -506,48 +507,55 @@ def validate_rules(sections: list[dict]) -> tuple[bool, str]:
 #      that don't have tooltips of their own.
 # Both are sanitized via _sanitize_node and emitted as one keyword list.
 
-_TOOLTIP_BLOCK = re.compile(
-    r'<span\s+id="tooltip_content(\d+)"[^>]*>(.*?)</span></div>',
-    re.DOTALL,
-)
-_TOOLTIP_NAME = re.compile(
-    r'<div class="(?:tooltip_header|abName)">([^<]+)</div>'
-)
+# Strip 11e's leading rule-number ("01.02.05 " or "24.28 ") from names so
+# slugs and display labels stay readable.
+_LEADING_RULENUM = re.compile(r"^\d+(?:\.\d+)+\s+")
 
 
 def scrape_keywords(html: str) -> list[dict]:
     keywords: list[dict] = []
     seen_slugs: set[str] = set()
 
-    # 1) Tooltip definitions.
-    for m in _TOOLTIP_BLOCK.finditer(html):
-        body = m.group(2)
-        name_m = _TOOLTIP_NAME.search(body)
-        if not name_m:
+    # 1) Tooltip definitions — parse with BeautifulSoup so nested tags don't
+    #    trip up regex boundary detection (11e wraps a rule-number span inside
+    #    the abName div: `[PRECISION]<span class="h_number">24.28</span>`,
+    #    which broke the previous non-greedy `.*?</span></div>` matcher).
+    soup = BeautifulSoup(html, "html.parser")
+    for template in soup.find_all("div", class_="tooltip_templates"):
+        span = template.find("span", id=re.compile(r"^tooltip_content\d+$"))
+        if not span:
             continue
-        name = name_m.group(1).strip()
-        # Some tooltip names are noise from inline stratagem cards — skip
-        # anything that looks like a numbered stratagem header.
-        if re.match(r"^\d+\s*CP", name) or len(name) > 80:
+        name_div = span.find("div", class_=lambda c: c in ("tooltip_header", "abName"))
+        if not name_div:
             continue
-        # Drop the header div + the link/anchor div before sanitizing.
-        body_no_header = _TOOLTIP_NAME.sub("", body, count=1)
-        body_no_header = re.sub(
-            r'<a[^>]*><div class="tooltip_link"></div></a>', "", body_no_header
-        )
-        body_no_header = re.sub(
-            r'<div style="clear:both"></div>', "", body_no_header
-        )
-        soup = BeautifulSoup(f"<div>{body_no_header}</div>", "html.parser")
-        for el in soup.find_all("div", class_=re.compile(r"tooltip_link|tooltip_header")):
-            el.decompose()
-        _sanitize_node(soup.div)
-        for tag in list(soup.div.find_all(["p", "div"])):
+        # Grab the visible name; strip nested h_number spans first.
+        for hn in name_div.find_all("span", class_="h_number"):
+            hn.decompose()
+        name = name_div.get_text().strip()
+        name = _LEADING_RULENUM.sub("", name)
+        if not name or re.match(r"^\d+\s*CP", name) or len(name) > 80:
+            continue
+
+        # Clone the tooltip body so we can sanitize without mutating the doc.
+        body_soup = BeautifulSoup(str(span), "html.parser")
+        outer = body_soup.find("span", id=re.compile(r"^tooltip_content\d+$"))
+        # Drop navigation chrome and the header we already consumed.
+        for junk in outer.find_all("div", class_=lambda c: c in ("tooltip_header", "abName", "tooltip_link")):
+            junk.decompose()
+        for junk in outer.find_all("a"):
+            child = junk.find("div", class_="tooltip_link")
+            if child:
+                junk.decompose()
+        for junk in outer.find_all("div", attrs={"style": "clear:both"}):
+            junk.decompose()
+        _sanitize_node(outer)
+        for tag in list(outer.find_all(["p", "div"])):
             if not tag.get_text(strip=True) and not tag.find("img"):
                 tag.decompose()
-        desc = soup.div.decode_contents().strip()
+        desc = outer.decode_contents().strip()
         if not desc:
             continue
+
         kw_type = _classify_keyword(name, desc)
         slug = _slugify(name)
         if slug in seen_slugs:
@@ -555,39 +563,56 @@ def scrape_keywords(html: str) -> list[dict]:
         seen_slugs.add(slug)
         keywords.append({"slug": slug, "name": name, "type": kw_type, "html": desc})
 
-    # 2) Weapon abilities — h3s inside the "Weapon Abilities" h3 section.
-    wa_m = re.search(r'<h3[^>]*>Weapon Abilities</h3>', html)
-    if wa_m:
-        end_m = re.search(r"<h[12]\b", html[wa_m.end():])
-        wa_chunk = html[wa_m.end(): wa_m.end() + (end_m.start() if end_m else 80000)]
-        # Each weapon ability is delimited by <a name="..."></a><h3>NAME</h3>...
-        # Use the h3 positions to slice.
-        h3s = list(re.finditer(r'<h3[^>]*>([^<]+)</h3>', wa_chunk))
-        for i, hm in enumerate(h3s):
-            name = hm.group(1).strip()
-            # Skip non-weapon-ability h3s that snuck in (Charge Bonus etc.).
-            if name.lower() in {"charge bonus", "charging with a unit",
-                                 "charging over terrain", "charging with flying models"}:
-                continue
-            chunk_start = hm.end()
-            chunk_end = h3s[i + 1].start() if i + 1 < len(h3s) else len(wa_chunk)
-            chunk = wa_chunk[chunk_start:chunk_end]
-            soup = BeautifulSoup(f"<div>{chunk}</div>", "html.parser")
-            _sanitize_node(soup.div)
-            desc = soup.div.decode_contents().strip()
-            if not desc:
-                continue
-            slug = _slugify(name)
-            if slug in seen_slugs:
-                continue
-            seen_slugs.add(slug)
-            keywords.append({"slug": slug, "name": name, "type": "weapon", "html": desc})
+    # 2) 11e weapon-ability cards in the body. Each is a
+    #      <div class="abWrap BreakInsideAvoid">
+    #        <div class="abNameWrap">
+    #          <div class="abName">[LANCE]<span class="h_number">24.21</span></div>
+    #          ...
+    #        </div>
+    #        ...definition text...
+    #      </div>
+    #    About half of these also have tooltip counterparts (picked up above),
+    #    but many — [LANCE], [PISTOL], [HAZARDOUS], [ASSAULT], etc. — only
+    #    exist as body cards.
+    for wrap in soup.find_all("div", class_="abWrap"):
+        name_div = wrap.find("div", class_="abName")
+        if not name_div:
+            continue
+        # Only the bracketed style is a weapon ability; other abWrap blocks
+        # exist for stratagems/unit abilities that we don't want here.
+        raw = "".join(t for t in name_div.strings)
+        if "[" not in raw or "]" not in raw:
+            continue
+        name = re.sub(r"\d+(?:\.\d+)+\s*$", "", raw).strip()
+        slug = _slugify(name)
+        if slug in seen_slugs or not slug:
+            continue
+
+        # Snapshot the abWrap so we can sanitize without touching the doc.
+        body_soup = BeautifulSoup(str(wrap), "html.parser")
+        outer = body_soup.find("div", class_="abWrap")
+        # Drop the name header and the icon slot; keep the description body.
+        for junk in outer.find_all("div", class_=lambda c: c in ("abNameWrap", "abName", "abIcon")):
+            junk.decompose()
+        _sanitize_node(outer)
+        for tag in list(outer.find_all(["p", "div"])):
+            if not tag.get_text(strip=True) and not tag.find("img"):
+                tag.decompose()
+        desc = outer.decode_contents().strip()
+        if not desc:
+            continue
+
+        seen_slugs.add(slug)
+        keywords.append({"slug": slug, "name": name, "type": "weapon", "html": desc})
 
     keywords.sort(key=lambda k: k["name"].lower())
     return keywords
 
 
 def _classify_keyword(name: str, html: str) -> str:
+    # 11e wraps weapon abilities in brackets: [SUSTAINED HITS], [LANCE], etc.
+    if name.startswith("[") and name.endswith("]"):
+        return "weapon"
     upper = name.isupper() or name.replace(" ", "").isupper()
     text = html.lower()
     if "in their profile" in text and "weapons" in text:
@@ -600,7 +625,9 @@ def _classify_keyword(name: str, html: str) -> str:
 def validate_keywords(keywords: list[dict]) -> tuple[bool, str]:
     if len(keywords) < 30:
         return False, f"only {len(keywords)} keywords (expected at least 30)"
-    required = {"deep-strike", "infiltrators", "leader", "precision", "sustained-hits"}
+    # 11e-canonical anchors — weapon abilities keep bracketed names → these
+    # slugs. If Wahapedia restructures again, the fail-safe keeps the old file.
+    required = {"precision", "sustained-hits", "lethal-hits", "lance"}
     have = {k["slug"] for k in keywords}
     missing = required - have
     if missing:

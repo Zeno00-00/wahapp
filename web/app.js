@@ -532,15 +532,47 @@
 
   // ---------------- Views: Rules ----------------
 
-  const RULES_GROUPS = [
-    { label: 'Game Setup', match: ['Books', 'Missions', 'Armies', 'Battlefield', 'Measuring Distances', 'Determining Visibility', 'Dice', 'Sequencing'] },
-    { label: 'Command Phase', match: ['1. Command', '2. Battle-shock'] },
-    { label: 'Movement Phase', match: ['1. Move Units', '2. Reinforcements', 'Transports'] },
-    { label: 'Shooting Phase', match: ['1. Hit Roll', '2. Wound Roll', '3. Allocate Attack', '4. Saving Throw', '5. Inflict Damage'] },
-    { label: 'Charge / Fight Phase', match: ['1. Fights First', '2. Remaining Combats', '1. Pile In', '2. Make Melee Attacks', '3. Consolidate'] },
-    { label: 'Terrain', match: ['Craters and Rubble', 'Barricades and Fuel Pipes', 'Battlefield Debris and Statuary', 'Hills, Industrial Structures, Sealed Buildings and Armoured Containers', 'Woods', 'Ruins', 'Example Battlefields'] },
-    { label: 'Building an Army', match: ['Muster Your Army', 'Objective Markers', 'Mission Map Key'] },
+  // 11e uses numeric prefixes on section slugs (e.g. `1-hit-roll-0501`),
+  // where the last four digits encode chapter (05) and step (01). We group by
+  // that chapter code — much less brittle than matching by title.
+  const RULES_GROUP_CODES = [
+    { code: '01', label: 'Basic Concepts' },
+    { code: '03', label: 'Moving Units' },
+    { code: '04', label: 'Attacks' },
+    { code: '05', label: 'Attack Sequence' },
+    { code: '06', label: 'Other Concepts' },
+    { code: '07', label: 'The Battle Round' },
+    { code: '08', label: 'Command Phase' },
+    { code: '09', label: 'Movement Phase' },
+    { code: '10', label: 'Shooting Phase' },
+    { code: '11', label: 'Charge Phase' },
+    { code: '12', label: 'Fight Phase' },
+    { code: '13', label: 'Terrain' },
+    { code: '14', label: 'Objectives' },
+    { code: '15', label: 'Stratagems' },
+    { code: '16', label: 'Actions' },
+    { code: '17', label: 'Monsters & Vehicles' },
+    { code: '18', label: 'Transports' },
+    { code: '19', label: 'Attached Units' },
+    { code: '20', label: 'Strategic Reserves' },
+    { code: '21', label: 'Flying & Surging' },
+    { code: '22', label: 'Abilities' },
+    { code: '23', label: 'Aircraft' },
+    { code: '24', label: 'Core Abilities' },
+    { code: '25', label: 'Muster Armies' },
   ];
+
+  // Extract the chapter code from a section — matches trailing "-NNNN" or
+  // "-NN" (where NN is the chapter number). Returns e.g. "05" for
+  // "1-hit-roll-0501" or "07" for "the-battle-round-07".
+  function sectionChapterCode(section) {
+    const m = section.slug.match(/-(\d{2})(?:\d{2})?$/);
+    return m ? m[1] : null;
+  }
+  // Strip trailing 11e rule numbers like "1. Hit Roll 05.01" → "1. Hit Roll".
+  function cleanRuleTitle(title) {
+    return title.replace(/\s+\d{2}(?:\.\d{2})?\s*$/, '');
+  }
 
   async function viewRules() {
     setTitle('Core Rules');
@@ -556,27 +588,43 @@
       makeHref: h => `#/rules/${h.i}`,
     });
 
-    const bySlug = Object.fromEntries(r.sections.map(s => [s.title, s]));
-    const toc = el('div');
-    const seen = new Set();
-    for (const grp of RULES_GROUPS) {
-      const items = grp.match.map(t => bySlug[t]).filter(Boolean);
-      if (!items.length) continue;
-      toc.append(el('div', { class: 'rules-toc-group' }, grp.label));
-      const ul = el('ul', { class: 'list' },
-        items.map(s => {
-          seen.add(s.slug);
-          return el('li', {}, el('a', { href: `#/rules/${s.slug}` }, s.title));
-        })
-      );
-      toc.append(ul);
+    // Bucket sections by 11e chapter code (05, 07, 08, …). Anything without
+    // a code (like "books", "basic-rules") lands in an "Introduction" bucket.
+    const byCode = new Map();
+    const intro = [];
+    for (const s of r.sections) {
+      const code = sectionChapterCode(s);
+      if (!code) {
+        intro.push(s);
+        continue;
+      }
+      if (!byCode.has(code)) byCode.set(code, []);
+      byCode.get(code).push(s);
     }
-    const leftover = r.sections.filter(s => !seen.has(s.slug));
-    if (leftover.length) {
-      toc.append(el('div', { class: 'rules-toc-group' }, 'Other'));
+    const toc = el('div');
+    if (intro.length) {
+      toc.append(el('div', { class: 'rules-toc-group' }, 'Introduction'));
       toc.append(el('ul', { class: 'list' },
-        leftover.map(s => el('li', {}, el('a', { href: `#/rules/${s.slug}` }, s.title)))
+        intro.map(s => el('li', {}, el('a', { href: `#/rules/${s.slug}` }, cleanRuleTitle(s.title))))
       ));
+    }
+    for (const grp of RULES_GROUP_CODES) {
+      const items = byCode.get(grp.code);
+      if (!items || !items.length) continue;
+      toc.append(el('div', { class: 'rules-toc-group' }, grp.label));
+      toc.append(el('ul', { class: 'list' },
+        items.map(s => el('li', {}, el('a', { href: `#/rules/${s.slug}` }, cleanRuleTitle(s.title))))
+      ));
+      byCode.delete(grp.code);
+    }
+    // Any codes we didn't have an explicit label for → "Other"
+    if (byCode.size) {
+      toc.append(el('div', { class: 'rules-toc-group' }, 'Other'));
+      for (const items of byCode.values()) {
+        toc.append(el('ul', { class: 'list' },
+          items.map(s => el('li', {}, el('a', { href: `#/rules/${s.slug}` }, cleanRuleTitle(s.title))))
+        ));
+      }
     }
     ts.input.addEventListener('input', () => { toc.hidden = ts.isActive(); });
 
@@ -588,9 +636,10 @@
     await loadKeywords();
     const sec = r.sections.find(s => s.slug === slug);
     if (!sec) return el('div', { class: 'empty' }, 'Section not found.');
-    setTitle(sec.title);
+    const cleanTitle = cleanRuleTitle(sec.title);
+    setTitle(cleanTitle);
     const card = el('div', { class: 'card rules' });
-    card.append(el('h2', { style: 'margin-top:0' }, sec.title));
+    card.append(el('h2', { style: 'margin-top:0' }, cleanTitle));
     const body = el('div');
     body.innerHTML = sec.html;
     linkifyKeywords(body);
